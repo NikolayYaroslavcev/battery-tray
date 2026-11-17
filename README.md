@@ -6,6 +6,17 @@ Shows the battery level of wireless Razer headsets, mice and keyboards on the Wi
 
 I wrote it because Synapse 4 doesn't know my Barracuda X 2.4 at all (its log says `supported type: unknown`), and Windows only reports battery for Bluetooth devices. The program asks the USB dongle directly.
 
+**[Download RazerBatteryIndicator.exe](../../releases/latest)** (Windows 10/11, nothing to install)
+
+## Установка
+
+1. Откройте страницу [последней версии](../../releases/latest) и скачайте файл `RazerBatteryIndicator.exe`. Если браузер не даёт скачать exe, возьмите `RazerBatteryIndicator.zip` и распакуйте его.
+2. Перенесите файл туда, где он будет лежать постоянно, например в «Документы». Из папки «Загрузки» его потом легко случайно удалить.
+3. Запустите его двойным щелчком. Если появится синее окно «Windows защитила ваш компьютер», нажмите «Подробнее», затем «Выполнить в любом случае». Так Windows реагирует на любую программу без платной цифровой подписи.
+4. Всё. Справа внизу, рядом с часами, появится заряд ваших устройств. Программа сама запускается вместе с Windows. Если это не нужно, нажмите на процент правой кнопкой и снимите галочку «Запускать с Windows».
+
+Права администратора, Python и Synapse не нужны.
+
 ## What you get
 
 A small entry per device left of the tray icons: a headset, mouse or keyboard icon and the percentage. The background is transparent, so it sits on whatever taskbar you have (dark, light, accent colour, acrylic, TranslucentTB). The number turns yellow below 35% and red below 20%, and a lightning icon blinks while the device charges.
@@ -20,13 +31,14 @@ It polls once a minute and uses about 20 MB of RAM. CPU use is close to zero.
 
 ## Install
 
-1. Download `RazerBatteryIndicator.exe` from [Releases](../../releases).
-2. Run it. Windows SmartScreen may warn about an unknown publisher because the exe isn't signed: click "More info", then "Run anyway". Some antivirus programs also flag PyInstaller builds by mistake. If you don't trust the exe, run it from source (below), it's one Python file.
-3. Right click the percentage and tick "Запускать с Windows" if you want it on every login.
+1. Download `RazerBatteryIndicator.exe` from the [latest release](../../releases/latest). If your browser blocks exe downloads, take `RazerBatteryIndicator.zip` and unpack it.
+2. Put it somewhere permanent, e.g. Documents, not Downloads.
+3. Double-click it. Windows SmartScreen may say it protected your PC because the exe isn't signed: click "More info", then "Run anyway". Some antivirus programs also flag PyInstaller builds by mistake. If you don't trust the exe, run it from source (below), it's one Python file.
+4. That's it. The battery level shows up next to the clock, and the program starts with Windows from now on. To stop that, right click the percentage and untick "Запускать с Windows".
 
 Windows 10 or 11, no admin rights required. The interface is in Russian for now.
 
-To remove it: untick "Запускать с Windows", close it from the menu, delete the exe and the folder `%APPDATA%\RazerBatteryIndicator`.
+To remove it: untick "Запускать с Windows", choose "Выход" in the same menu, then delete the exe and the folder `%APPDATA%\RazerBatteryIndicator`.
 
 ## Supported devices
 
@@ -63,7 +75,9 @@ python -m venv .venv
 
 `python razer_battery.py --once` prints what it finds and exits.
 
-To build the exe: `pip install pyinstaller pillow`, `python make_icon.py`, then `pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py`.
+To build the exe: `pip install -r requirements-build.txt`, `python make_icon.py`, then `pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py`.
+
+Each release lists the SHA-256 of the exe. To check your download: `certutil -hashfile RazerBatteryIndicator.exe SHA256`.
 
 ## How it works
 
@@ -74,10 +88,6 @@ The protocol details and the list of wireless mice come from [OpenRazer](https:/
 Settings and the learned drain rate are stored in `%APPDATA%\RazerBatteryIndicator\config.json`.
 
 Not affiliated with Razer.
-
-## Коротко по-русски
-
-Показывает заряд беспроводных наушников, мышей и клавиатур Razer на панели задач, без Synapse. Скачайте exe из Releases и запустите. Если SmartScreen ругается, нажмите «Подробнее», затем «Выполнить в любом случае». Автозапуск включается в меню по правому клику. Проверено только на Razer Barracuda X 2.4. Если ваше устройство не видно, запустите `RazerBatteryIndicator.exe --once` и приложите к issue файл `%APPDATA%\RazerBatteryIndicator\diagnostics.txt`.
 
 ## License
 

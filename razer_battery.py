@@ -140,10 +140,13 @@ def report_kinds(h):
 
 
 
-def protocols_for(kinds, kind):
+def protocols_for(kinds, d):
     table = ((proto_pa2, ("out", 2)), (proto_pa1, ("out", 1)), (proto_blob, ("feat", 0xFF)), (proto_std, ("feat", 0)))
-    # mice and keyboards get the classic report only
-    return [p for p, k in table if k in kinds and (kind == "headset" or p is proto_std)]
+    # vendor frames only for the headset families they were documented on; a different device could
+    # read the same bytes as a settings write. Everything else gets the classic read-only report.
+    name = (d.get("product_string") or "").lower()
+    known = d["product_id"] in HEADSET_PIDS or any(w in name for w in ("barracuda", "blackshark", "nari"))
+    return [p for p, k in table if k in kinds and (known or p is proto_std)]
 
 
 # --- device discovery ---
@@ -163,7 +166,8 @@ def classify(d):
     return None
 
 def nice_name(d):
-    name = (d.get("product_string") or "").replace(" 2.4", "").replace(" Dongle", "").strip()
+    name = "".join(ch for ch in (d.get("product_string") or "") if ch.isprintable())[:48]
+    name = name.replace(" 2.4", "").replace(" Dongle", "").strip()
     return name if name.lower().startswith("razer") else f"Razer {name or 'device'}"
 
 
@@ -177,7 +181,7 @@ def _try(pid, d, kind, protos=None):
     except (OSError, ValueError):
         return None
     try:
-        for proto in protos or protocols_for(report_kinds(h), kind):
+        for proto in protos or protocols_for(report_kinds(h), d):
             try:
                 res = proto(h)
             except (OSError, ValueError):
@@ -398,12 +402,12 @@ class App:
         self.answered = set()                               # pids that ever returned a level
         self.menu_token = 0
         self.result, self.handled, self.updated = None, None, None
-        self.alert = None                                   # (pid, text, color, hide_at)
+        self.alert = None                                   # (pid or None, text, color, hide_at, seconds)
         self.hover, self.menu_open, self.phase = False, False, 0
         self.bg, self.bg_checked = "#1c1c1c", 0
         self.wake = threading.Event()
 
-        self.mode = tk.StringVar(value=self.cfg.get("mode", "taskbar"))
+        self.mode = tk.StringVar(value="notch" if self.cfg.get("mode") == "notch" else "taskbar")
         self.autostart = autostart_enabled()
         # (icon, label, action, checked); None is a separator
         self.menu_items = [
@@ -423,6 +427,16 @@ class App:
         self.pc.bind("<Motion>", lambda e: self.menu_hover_at(e.y))
         self.pc.bind("<Leave>", lambda e: self.menu_hover_at(-1))
         self.pc.bind("<Button-1>", lambda e: self.menu_click(e.y))
+
+        if not self.cfg.get("welcomed"):       # first launch: turn on autostart and say where we are
+            self.cfg["welcomed"] = True
+            save_cfg(self.cfg)
+            if not self.autostart:
+                try:
+                    self.toggle_autostart()
+                except OSError:
+                    pass
+            self.show_alert(None, "Готово! Заряд теперь здесь, у часов. Правый клик — меню", GREEN, 12)
 
         threading.Thread(target=self.poll_loop, daemon=True).start()
         self.tick()
@@ -452,7 +466,8 @@ class App:
             if dev is None:
                 dev = self.devices[pid] = Device(pid, kind, name)
                 try:                          # continue the measurement from the previous run
-                    t0, l0, last = self.cfg.get("track", {}).get(name, (0, 0, 0))
+                    track = self.cfg.get("track")
+                    t0, l0, last = track.get(name, (0, 0, 0)) if isinstance(track, dict) else (0, 0, 0)
                     if time.time() - float(last) < 600:
                         dev.hist, dev.seen_at = [(float(t0), int(l0))], float(last)
                 except (TypeError, ValueError):
@@ -493,7 +508,9 @@ class App:
         t0, l0 = dev.hist[0]
         hours, drop = (now - t0) / 3600, l0 - level
         if hours >= 0.5 and drop >= 2:
-            rates = self.cfg.setdefault("rates", {})
+            if not isinstance(self.cfg.get("rates"), dict):
+                self.cfg["rates"] = {}
+            rates = self.cfg["rates"]
             old, rate = rates.get(dev.name), drop / hours
             old = old if isinstance(old, (int, float)) and old > 0 else None
             rates[dev.name] = round(rate if old is None else 0.5 * old + 0.5 * rate, 3)
@@ -508,15 +525,18 @@ class App:
     def save_track(self, dev, hist):
         # kept in the config so a restart doesn't throw the measurement away
         dev.hist = hist
-        track = self.cfg.setdefault("track", {})
+        if not isinstance(self.cfg.get("track"), dict):
+            self.cfg["track"] = {}
+        track = self.cfg["track"]
         if hist:
             track[dev.name] = [hist[0][0], hist[0][1], time.time()]
         elif track.pop(dev.name, None) is None:
             return
         save_cfg(self.cfg)
 
-    def show_alert(self, dev, text, color):
-        self.alert = (dev.pid, text, color, None)         # timer starts when it's actually shown
+    def show_alert(self, dev, text, color, seconds=8):
+        # dev=None puts the text in the card's footer; the timer starts once it's actually on screen
+        self.alert = (dev.pid if dev else None, text, color, None, seconds)
 
     def set_mode(self, mode):
         self.mode.set(mode)
@@ -622,7 +642,7 @@ class App:
             self.draw_card(geom)
             put_on_top(self.card_hwnd)
             if self.alert and self.alert[3] is None:
-                self.alert = self.alert[:3] + (time.time() + 8,)
+                self.alert = self.alert[:3] + (time.time() + self.alert[4], self.alert[4])
         self.show(self.card, card)
 
     def show(self, win, on):
@@ -715,8 +735,9 @@ class App:
         level, charging = st
         if charging:
             return ("Заряд полный" if level >= 100 else "Заряжается"), GREEN
-        rate = self.cfg.get("rates", {}).get(dev.name)
-        if rate:
+        rates = self.cfg.get("rates")
+        rate = rates.get(dev.name) if isinstance(rates, dict) else None
+        if isinstance(rate, (int, float)) and rate > 0:
             return f"От батареи · хватит на {fmt_hours(level / rate)}", sub
         mins = int((time.time() - dev.hist[0][0]) / 60) if dev.hist else 0
         if mins < 30:
@@ -768,7 +789,9 @@ class App:
             dwm_style(self.card_hwnd, dark=not light)
         devs, pad, row = list(self.devices.values()), p(18), p(74)
         left = f"Обновлено в {self.updated}" if self.updated else ""
-        right = "ЛКМ — обновить · ПКМ — меню"
+        right, left_col = "ЛКМ — обновить · ПКМ — меню", sub
+        if self.alert and self.alert[0] is None:
+            left, right, left_col = self.alert[1], "", self.alert[2]
         empty = "Ищу устройства…" if self.result is None else "Беспроводные устройства Razer не найдены"
         # fit the longest line
         W = 2 * pad + max([p(280), self.f_small.measure(left + right) + p(24), self.f_sub.measure(empty)]
@@ -807,7 +830,7 @@ class App:
             c.create_text(pad, y0 + p(54), text=text, font=self.f_sub, fill=col, anchor="w")
         fy = H - p(34)
         c.create_line(0, fy, W, fy, fill=line)
-        c.create_text(pad, fy + p(17), text=left, font=self.f_small, fill=sub, anchor="w")
+        c.create_text(pad, fy + p(17), text=left, font=self.f_small, fill=left_col, anchor="w")
         c.create_text(W - pad, fy + p(17), text=right, font=self.f_small, fill=sub, anchor="e")
 
 
