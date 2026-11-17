@@ -50,11 +50,13 @@ A small entry per device left of the tray icons: a headset, mouse or keyboard ic
 
 Hover over it and a card opens with a bar per device, the charging state and an estimate of how long the battery will last. The estimate is learned from how fast your own device actually drains, so the first one appears after about half an hour on battery. After that it is remembered.
 
+When a device goes to sleep or is switched off, its last level stays on the taskbar, dimmed, and the card says when it was read.
+
 A warning pops up at 20% and again at 10%, and once more when a device finishes charging. If a game or video is fullscreen at that moment, the warning waits until you leave it. The widget itself hides during fullscreen apps and never takes focus away from them.
 
 Left click refreshes. Right click opens the menu: refresh, taskbar or "notch" mode (a small black pill at the top of the screen), start with Windows, exit.
 
-It uses about 20 MB of RAM and close to zero CPU. Every battery query wakes the headset's radio, so while a device runs on battery it is asked only every 20 minutes, which leaves the headset free to switch itself off when idle. Hovering over the widget fetches fresh numbers right away. While charging it checks every 5 minutes, and a device that's off is looked for once a minute (that only talks to the dongle).
+It uses about 20 MB of RAM and close to zero CPU. Every battery query wakes the headset's radio, so while a device runs on battery it is asked only every 20 minutes, which leaves the headset free to switch itself off when idle. Hovering over the widget fetches fresh numbers right away, and so does waking the PC from sleep. While charging it checks every 5 minutes, and a device that's off is looked for once a minute (that only talks to the dongle).
 
 ## Install
 
@@ -79,7 +81,7 @@ The program reads each dongle's HID report descriptor and picks the protocol fro
 
 I only own the Barracuda X 2.4, so everything else is written from protocol notes by other people and may need fixes. Wired mice and keyboards are skipped on purpose, because they answer the battery request with garbage.
 
-If your device doesn't show up or shows nonsense, run `RazerBatteryIndicator.exe --once`. It saves what it found to `%APPDATA%\RazerBatteryIndicator\diagnostics.txt`. Open an issue with that file and your device's `VID:PID` (Device Manager, the device, Details, Hardware Ids).
+If your device doesn't show up or shows nonsense, run `RazerBatteryIndicator.exe --once`. It saves what it found to `%APPDATA%\RazerBatteryIndicator\diagnostics.txt`. Then [report the device](../../issues/new?template=device.yml) with that file and your device's `VID:PID` (Device Manager, the device, Details, Hardware Ids).
 
 ## Questions
 
@@ -101,11 +103,11 @@ python -m venv .venv
 .venv\Scripts\pythonw razer_battery.py
 ```
 
-`python razer_battery.py --once` prints what it finds and exits.
+`python razer_battery.py --once` prints what it finds and exits. `--quit` closes a running copy, `--portable` runs the exe without installing it.
 
 To build the exe: `pip install -r requirements-build.txt`, `python make_icon.py`, then `pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py`.
 
-Each release lists the SHA-256 of the exe. To check your download: `certutil -hashfile RazerBatteryIndicator.exe SHA256`.
+Releases are built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit, and each one links to its build log, so you can see the exe came from this source. Each release lists the SHA-256 of the exe. To check your download: `certutil -hashfile RazerBatteryIndicator.exe SHA256`.
 
 ## How it works
 

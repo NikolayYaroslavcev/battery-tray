@@ -32,7 +32,7 @@ POLL_ON_BATTERY, POLL_CHARGING, POLL_OFFLINE, HOVER_REFRESH = 20 * 60, 5 * 60, 6
 SLEEP_GAP = 2 * POLL_ON_BATTERY + 60     # longer silence than this means the PC slept, not that we waited
 LOW_LEVELS = (20, 10)
 APP = "RazerBatteryIndicator"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 REPO = "NikolayYaroslavcev/razer-battery-tray"
 CFG = Path(os.environ["APPDATA"]) / APP / "config.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -483,6 +483,7 @@ class Device:
     def __init__(self, pid, kind, name):
         self.pid, self.kind, self.name = pid, kind, name
         self.state, self.hist, self.alerted, self.seen_at = None, [], set(), 0
+        self.last = None                      # (percent, "HH:MM") of the last real reading
 
 
 class App:
@@ -551,7 +552,7 @@ class App:
         ]
         self.update = self.update_seen = self.update_done = None
         self.quit_ev, self.show_ev, self.quitting = named_event("quit"), named_event("show"), False
-        self.interval, self.polled_at = POLL_OFFLINE, 0.0
+        self.interval, self.polled_at, self.ticked_at = POLL_OFFLINE, 0.0, time.time()
         self.menu_rows, self.menu_hover, self.menu_geom, self.card_geom = [], -1, None, None
         self.hit.bind("<Button-1>", lambda e: self.wake.set())
         self.hit.bind("<Button-3>", self.open_menu)
@@ -656,6 +657,8 @@ class App:
                 old = dev.state
                 state = (state[0], old[1] if isinstance(old, tuple) else False)
             dev.state = state
+            if isinstance(state, tuple):
+                dev.last = (state[0], time.strftime("%H:%M"))
             seen.add(pid)
             self.track(dev)
         self.devices = {pid: d for pid, d in sorted(self.devices.items(), key=lambda kv: list(ICONS).index(kv[1].kind))
@@ -789,6 +792,10 @@ class App:
         self.root.destroy()
 
     def update_ui(self):
+        now = time.time()
+        if now - self.ticked_at > 60:          # the PC slept: the numbers are stale
+            self.wake.set()
+        self.ticked_at = now
         if k32.WaitForSingleObject(self.quit_ev, 0) == 0:          # installer / uninstaller asks us to go
             self.quit()
             return
@@ -868,8 +875,8 @@ class App:
     def items(self):
         if not self.devices:
             return [(ICONS["headset"], "…" if self.result is None else "—", None)]
-        return [(ICONS[d.kind], f"{d.state[0]}%" if isinstance(d.state, tuple) else "—", d.state)
-                for d in self.devices.values()]
+        return [(ICONS[d.kind], f"{d.state[0]}%" if isinstance(d.state, tuple)
+                 else f"{d.last[0]}%" if d.last else "—", d.state) for d in self.devices.values()]
 
     def item_width(self, text, st):
         return self.px(22) + self.f_text.measure(text) + (self.px(14) if isinstance(st, tuple) and st[1] else 0)
@@ -936,6 +943,8 @@ class App:
             return self.alert[1], self.alert[2]
         st = dev.state
         if not isinstance(st, tuple):
+            if dev.last:
+                return f"{OFFLINE_TEXT[dev.kind]} · было {dev.last[0]}% в {dev.last[1]}", sub
             return OFFLINE_TEXT[dev.kind], sub
         level, charging = st
         if charging:
@@ -1016,7 +1025,7 @@ class App:
             c.create_text(pad, pad + row // 2 - p(8), text=empty, font=self.f_sub, fill=sub, anchor="w")
         for i, d in enumerate(devs):
             y0 = pad + i * row
-            level = d.state[0] if isinstance(d.state, tuple) else None
+            level = d.state[0] if isinstance(d.state, tuple) else d.last[0] if d.last else None
             charging = isinstance(d.state, tuple) and d.state[1]
             c.create_text(pad, y0 + p(12), text=ICONS[d.kind], font=(self.icon_font, -p(16)), fill=fg, anchor="w")
             c.create_text(pad + p(26), y0 + p(12), text=d.name, font=self.f_name, fill=fg, anchor="w")
@@ -1045,6 +1054,8 @@ if __name__ == "__main__":
         print(report)
         CFG.parent.mkdir(parents=True, exist_ok=True)
         (CFG.parent / "diagnostics.txt").write_text(report, "utf-8")
+    elif "--quit" in sys.argv:
+        stop_running()
     elif "--uninstall" in sys.argv:
         uninstall()
     elif getattr(sys, "frozen", False) and Path(sys.executable).parent != INSTALL_DIR and "--portable" not in sys.argv:

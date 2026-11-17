@@ -1,0 +1,32 @@
+name: My device isn't shown / shows a wrong level
+description: Help add or fix support for a Razer headset, mouse or keyboard
+labels: [device]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: Device model
+      placeholder: Razer BlackShark V2 Pro (2023)
+    validations:
+      required: true
+  - type: input
+    id: ids
+    attributes:
+      label: VID:PID
+      description: Device Manager > your dongle > Properties > Details > Hardware Ids, e.g. USB\VID_1532&PID_0555 is 1532:0555
+      placeholder: "1532:0555"
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: diagnostics.txt
+      description: Run `RazerBatteryIndicator.exe --once`, then paste the contents of %APPDATA%\RazerBatteryIndicator\diagnostics.txt
+      render: text
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: Not shown at all, shows "—", wrong percentage, charging not detected...
+    validations:
+      required: true

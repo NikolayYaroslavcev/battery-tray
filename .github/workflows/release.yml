@@ -1,0 +1,47 @@
+# Pushing a tag like v1.2.0 builds the exe on GitHub's servers from this repository and publishes the release,
+# with SHA-256 hashes the in-app updater checks downloads against.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Check that VERSION matches the tag
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path razer_battery.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "VERSION $v in razer_battery.py does not match tag ${{ github.ref_name }}" }
+
+      - run: pip install -r requirements-build.txt
+      - run: python make_icon.py
+      - run: pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py
+
+      - name: Zip, hash, write release notes
+        shell: pwsh
+        run: |
+          Compress-Archive dist/RazerBatteryIndicator.exe dist/RazerBatteryIndicator.zip
+          $hashes = Get-FileHash dist/RazerBatteryIndicator.exe, dist/RazerBatteryIndicator.zip |
+            ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" }
+          $run = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          $fence = '```'
+          $notes = (Get-Content RELEASE_NOTES.md -Raw) +
+            "`nBuilt by GitHub Actions from commit ${{ github.sha }} ([build log]($run)).`n`nSHA-256:`n$fence`n" +
+            ($hashes -join "`n") + "`n$fence`n"
+          Set-Content notes.md $notes -Encoding utf8
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/RazerBatteryIndicator.exe dist/RazerBatteryIndicator.zip --title "${{ github.ref_name }}" --notes-file notes.md
