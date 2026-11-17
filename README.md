@@ -1,3 +1,5 @@
+<img src="icon.png" width="96" align="right" alt="">
+
 # razer-battery-tray
 
 Shows the battery level of wireless Razer headsets, mice and keyboards on the Windows taskbar, next to the clock. Razer Synapse is not needed.
@@ -61,7 +63,7 @@ python -m venv .venv
 
 `python razer_battery.py --once` prints what it finds and exits.
 
-To build the exe: `pip install pyinstaller`, then `pyinstaller --onefile --noconsole --name RazerBatteryIndicator razer_battery.py`.
+To build the exe: `pip install pyinstaller pillow`, `python make_icon.py`, then `pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py`.
 
 ## How it works
 
