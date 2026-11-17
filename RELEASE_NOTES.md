@@ -4,10 +4,10 @@ Download `RazerBatteryIndicator.exe` and double-click it. It installs itself: sh
 
 Windows SmartScreen will warn because the file isn't signed with a paid certificate: "More info", then "Run anyway". / SmartScreen предупредит, что файл без платной подписи: «Подробнее», затем «Выполнить в любом случае».
 
-What's new in 1.2.0:
-- A device that is asleep or switched off keeps showing its last level, dimmed, with the time it was read.
-- Fresh numbers right after the PC wakes from sleep.
-- `RazerBatteryIndicator.exe --quit` closes the running copy.
-- Releases are now built by GitHub Actions straight from the source in this repository.
+What's new in 1.2.1:
+- Fixed a crash right after an in-app update: the new version tried to delete the old exe while it was still closing.
+- Unexpected startup errors go to %APPDATA%\RazerBatteryIndicator\error.log instead of a Python error window.
+
+If 1.2.0 showed "Unhandled exception" after updating, just start it again from the desktop shortcut; the update itself went through.
 
 Tested on Razer Barracuda X 2.4 only.

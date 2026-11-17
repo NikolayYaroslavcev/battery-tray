@@ -32,7 +32,7 @@ POLL_ON_BATTERY, POLL_CHARGING, POLL_OFFLINE, HOVER_REFRESH = 20 * 60, 5 * 60, 6
 SLEEP_GAP = 2 * POLL_ON_BATTERY + 60     # longer silence than this means the PC slept, not that we waited
 LOW_LEVELS = (20, 10)
 APP = "RazerBatteryIndicator"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 REPO = "NikolayYaroslavcev/razer-battery-tray"
 CFG = Path(os.environ["APPDATA"]) / APP / "config.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -351,6 +351,16 @@ def register(exe):
             winreg.SetValueEx(k, name, 0, winreg.REG_SZ, val)
         for name, val in (("NoModify", 1), ("NoRepair", 1), ("EstimatedSize", exe.stat().st_size // 1024)):
             winreg.SetValueEx(k, name, 0, winreg.REG_DWORD, val)
+
+def remove_old_exe():
+    """After an update the previous exe stays locked until its loader process exits; keep trying for a minute."""
+    old = Path(sys.executable).with_name(f"{Path(sys.executable).stem}.old.exe")
+    for _ in range(60):
+        try:
+            old.unlink(missing_ok=True)
+            return
+        except OSError:
+            time.sleep(1)
 
 def install():
     dst = INSTALL_DIR / f"{APP}.exe"
@@ -1048,7 +1058,7 @@ class App:
         c.create_text(W - pad, fy + p(17), text=right, font=self.f_small, fill=sub, anchor="e")
 
 
-if __name__ == "__main__":
+def main():
     if "--once" in sys.argv:          # diagnostics; the exe has no console, hence the file
         report = "\n".join(map(str, read_all())) or "no wireless Razer devices found"
         print(report)
@@ -1070,11 +1080,20 @@ if __name__ == "__main__":
             time.sleep(0.25)
         else:
             k32.SetEvent(named_event("show"))                         # already running: let it show itself
-            sys.exit(0)
+            return
         if getattr(sys, "frozen", False):
-            Path(sys.executable).with_name(f"{Path(sys.executable).stem}.old.exe").unlink(missing_ok=True)
+            threading.Thread(target=remove_old_exe, daemon=True).start()
             try:
                 register(Path(sys.executable))                        # keeps the version shown in Settings current
             except OSError:
                 pass
         App().root.mainloop()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:                 # no python traceback dialog for users; keep it for bug reports
+        import traceback
+        CFG.parent.mkdir(parents=True, exist_ok=True)
+        (CFG.parent / "error.log").write_text(traceback.format_exc(), "utf-8")
