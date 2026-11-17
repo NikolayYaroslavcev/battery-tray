@@ -19,16 +19,24 @@ Hovering over it opens a card:
 ## Установка
 
 1. Откройте страницу [последней версии](../../releases/latest) и скачайте файл `RazerBatteryIndicator.exe`. Если браузер не даёт скачать exe, возьмите `RazerBatteryIndicator.zip` и распакуйте его.
-2. Запустите его двойным щелчком. Скорее всего, Windows покажет синее окно «Windows защитила ваш компьютер»: нажмите «Подробнее», затем «Выполнить в любом случае» (см. ниже, почему так).
+2. Запустите его двойным щелчком. Windows, скорее всего, покажет синее окно. Это нормально, ниже объяснено почему. Нажмите «Подробнее»:
+
+   <img src="docs/smartscreen-1.png" width="360" alt="Окно SmartScreen: ссылка «Подробнее»">
+
+   Затем «Выполнить в любом случае»:
+
+   <img src="docs/smartscreen-2.png" width="360" alt="Окно SmartScreen: кнопка «Выполнить в любом случае»">
 3. Всё. Программа сама установится: появятся ярлыки на рабочем столе и в меню «Пуск», а справа внизу, рядом с часами, заряд ваших устройств. Она будет запускаться вместе с Windows. Если это не нужно, нажмите на процент правой кнопкой и снимите галочку «Запускать с Windows». Скачанный файл после этого можно удалить.
 
 Права администратора, Python и Synapse не нужны.
 
 ### Почему Windows или антивирус ругаются
 
-Чтобы Windows доверяла программе, разработчик покупает сертификат цифровой подписи. Он стоит несколько сотен долларов в год, а эта программа бесплатная и его нет. Поэтому:
+Windows показывает это окно для любой программы, у которой нет цифровой подписи. Подпись разработчик покупает у специальных компаний: сертификат стоит примерно 300 долларов в год, и его нужно продлевать. Платить столько за бесплатную программу я не буду, поэтому подписи нет.
 
-- Windows SmartScreen покажет «Windows защитила ваш компьютер» и «Неизвестный издатель». Это значит только, что файл не подписан, а не что в нём вирус. Нажмите «Подробнее», затем «Выполнить в любом случае».
+Слова «неизвестный издатель» значат только одно: Windows не знает, кто сделал файл. Она не проверяла его на вирусы и ничего плохого в нём не нашла. То же окно появляется у многих небольших бесплатных программ с GitHub. Когда файл скачает достаточно людей, SmartScreen обычно перестаёт его показывать.
+
+Что ещё может встретиться:
 - Браузер может написать, что файл «обычно не скачивают» или что он «может быть опасен». Выберите «Сохранить» или «Всё равно сохранить». Если exe не скачивается совсем, возьмите zip.
 - Некоторые антивирусы ошибочно помечают программы, собранные PyInstaller, как подозрительные. Это известная ложная тревога.
 
@@ -51,7 +59,7 @@ It uses about 20 MB of RAM and close to zero CPU. Every battery query wakes the 
 ## Install
 
 1. Download `RazerBatteryIndicator.exe` from the [latest release](../../releases/latest). If your browser blocks exe downloads, take `RazerBatteryIndicator.zip` and unpack it.
-2. Double-click it. Windows SmartScreen will most likely say "Windows protected your PC": click "More info", then "Run anyway". This happens because the exe isn't signed with a paid code-signing certificate (a few hundred dollars a year, too much for a free tool), not because anything is wrong with it. Browsers may also warn that the file "isn't commonly downloaded", and some antivirus programs flag PyInstaller builds by mistake. To check the file, compare `certutil -hashfile RazerBatteryIndicator.exe SHA256` with the hash in the release notes, or run it from source (below); it's one Python file.
+2. Double-click it. Windows SmartScreen will most likely say "Windows protected your PC": click "More info", then "Run anyway" (screenshots in the Russian section above). This happens because the exe isn't signed with a paid code-signing certificate (around $300 a year, which I'm not paying for a free tool), not because anything is wrong with it. "Unknown publisher" means Windows doesn't know who made the file, not that it found anything bad in it. Browsers may also warn that the file "isn't commonly downloaded", and some antivirus programs flag PyInstaller builds by mistake. To check the file, compare `certutil -hashfile RazerBatteryIndicator.exe SHA256` with the hash in the release notes, or run it from source (below); it's one Python file.
 3. That's it. The exe installs itself into `%LOCALAPPDATA%\Programs\Razer Battery Tray`, adds shortcuts to the desktop and the Start menu, starts with Windows from now on and shows the battery level next to the clock. You can delete the downloaded file afterwards. To skip autostart, right click the percentage and untick "Запускать с Windows".
 
 Windows 10 or 11, no admin rights required. The interface is in Russian for now. Running a newer downloaded exe the same way updates the installed copy. Start it with `--portable` if you'd rather run it from where it is without installing.
