@@ -6,7 +6,8 @@ Protocol by what the HID report descriptor offers:
   feature report FF  state blob (Barracuda X 0536, Nari)
   feature, no id     classic 90-byte report, class 07 (mice, keyboards, BlackShark V2 Pro 2020)
 """
-import ctypes, ctypes.wintypes as wt, json, os, sys, threading, time, tkinter as tk, tkinter.font as tkfont, winreg
+import ctypes, ctypes.wintypes as wt, hashlib, json, os, re, shutil, subprocess, sys, threading, time, winreg
+import tkinter as tk, tkinter.font as tkfont, urllib.request
 from pathlib import Path
 
 import hid
@@ -25,9 +26,14 @@ MOUSE_WORDS = ("mouse", "viper", "deathadder", "basilisk", "naga", "orochi", "ma
                "pro click", "cobra")
 KEYBOARD_WORDS = ("keyboard", "blackwidow", "deathstalker", "ornata", "pro type ultra", "cynosa")
 WIRELESS_WORDS = ("hyperspeed", "wireless", "receiver", "dongle", "dock", " pro")
-POLL_S = 60
+# Every query wakes the headset's radio, and the Barracuda X seems to count that as activity, so on
+# battery we ask less often than its 15-minute auto-off timer. Hovering the widget asks right away.
+POLL_ON_BATTERY, POLL_CHARGING, POLL_OFFLINE, HOVER_REFRESH = 20 * 60, 5 * 60, 60, 60
+SLEEP_GAP = 2 * POLL_ON_BATTERY + 60     # longer silence than this means the PC slept, not that we waited
 LOW_LEVELS = (20, 10)
 APP = "RazerBatteryIndicator"
+VERSION = "1.1.0"
+REPO = "NikolayYaroslavcev/razer-battery-tray"
 CFG = Path(os.environ["APPDATA"]) / APP / "config.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -229,6 +235,43 @@ def save_cfg(cfg):
     except OSError:
         pass
 
+# --- updates ---
+
+def _get(url, timeout, limit):
+    req = urllib.request.Request(url, headers={"User-Agent": "razer-battery-tray", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(limit)
+
+def latest_release():
+    """(version, exe_url, sha256) of the newest release, or None if it doesn't look right."""
+    rel = json.loads(_get(f"https://api.github.com/repos/{REPO}/releases/latest", 15, 1 << 20))
+    ver = str(rel.get("tag_name", "")).lstrip("v")
+    asset = next((a for a in rel.get("assets", []) if a.get("name") == f"{APP}.exe"), None)
+    sha = re.search(rf"\b([0-9A-Fa-f]{{64}})\s+{APP}\.exe", rel.get("body") or "")
+    if not (asset and sha and re.fullmatch(r"\d+(\.\d+){0,3}", ver)):
+        return None
+    url = str(asset.get("browser_download_url", ""))
+    if not url.startswith(f"https://github.com/{REPO}/releases/download/"):
+        return None
+    return ver, url, sha.group(1).lower()
+
+def is_newer(a, b):
+    return tuple(map(int, a.split("."))) > tuple(map(int, b.split(".")))
+
+def download_update(url, sha):
+    """Download, check the hash from the release notes, swap the exe in place. Returns the exe path."""
+    data = _get(url, 120, 64 << 20)
+    if hashlib.sha256(data).hexdigest() != sha:
+        raise ValueError("контрольная сумма не совпала")
+    exe = Path(sys.executable)
+    new, old = exe.with_name(f"{exe.stem}.new.exe"), exe.with_name(f"{exe.stem}.old.exe")
+    new.write_bytes(data)
+    old.unlink(missing_ok=True)
+    exe.rename(old)                   # a running exe can be renamed, just not overwritten
+    new.rename(exe)
+    return exe
+
+
 def _run_cmd():
     if getattr(sys, "frozen", False):          # pyinstaller exe
         return f'"{sys.executable}"'
@@ -241,15 +284,101 @@ def autostart_enabled():
     except OSError:
         return False
 
-def set_autostart(on):
+def set_autostart(on, cmd=None):
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         if on:
-            winreg.SetValueEx(k, APP, 0, winreg.REG_SZ, _run_cmd())
+            winreg.SetValueEx(k, APP, 0, winreg.REG_SZ, cmd or _run_cmd())
         else:
             try:
                 winreg.DeleteValue(k, APP)
             except OSError:
                 pass
+
+
+# --- install / uninstall: the downloaded exe installs itself on first run ---
+
+TITLE = "Razer Battery Tray"
+INSTALL_DIR = Path(os.environ["LOCALAPPDATA"]) / "Programs" / TITLE
+UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\RazerBatteryTray"
+NO_WINDOW, DETACHED = 0x08000000, 0x00000008
+
+k32 = ctypes.windll.kernel32
+k32.CreateMutexW.restype = k32.CreateEventW.restype = wt.HANDLE
+k32.CreateMutexW.argtypes = [ctypes.c_void_p, wt.BOOL, wt.LPCWSTR]
+k32.CreateEventW.argtypes = [ctypes.c_void_p, wt.BOOL, wt.BOOL, wt.LPCWSTR]
+k32.SetEvent.argtypes = k32.ResetEvent.argtypes = k32.CloseHandle.argtypes = [wt.HANDLE]
+k32.WaitForSingleObject.argtypes = [wt.HANDLE, wt.DWORD]
+
+def named_event(name):
+    """Manual-reset event shared by all copies: 'quit' closes the running one, 'show' pops its card."""
+    return k32.CreateEventW(None, True, False, f"Local\\{APP}.{name}")
+
+def already_running():
+    h = k32.CreateMutexW(None, False, f"Local\\{APP}")
+    busy = k32.GetLastError() == 183                  # ERROR_ALREADY_EXISTS
+    k32.CloseHandle(h)
+    return busy
+
+def stop_running():
+    ev = named_event("quit")
+    k32.SetEvent(ev)
+    for _ in range(40):
+        if not already_running():
+            break
+        time.sleep(0.1)
+    else:                                             # 1.0.0 doesn't listen for the event
+        subprocess.run(["taskkill", "/F", "/IM", f"{APP}.exe", "/FI", f"PID ne {os.getpid()}"],
+                       capture_output=True, creationflags=NO_WINDOW)
+        time.sleep(1)
+    k32.ResetEvent(ev)
+    k32.CloseHandle(ev)
+
+def _ps(script):
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                   capture_output=True, creationflags=NO_WINDOW, timeout=60)
+
+def _psq(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+_LINKS = ("foreach ($d in [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs')) "
+          "{ $l = Join-Path $d " + _psq(TITLE + ".lnk") + "; ")
+
+def register(exe):
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as k:
+        for name, val in (("DisplayName", TITLE), ("DisplayVersion", VERSION), ("Publisher", "NikolayYaroslavcev"),
+                          ("DisplayIcon", f"{exe},0"), ("InstallLocation", str(exe.parent)),
+                          ("UninstallString", f'"{exe}" --uninstall'), ("URLInfoAbout", f"https://github.com/{REPO}")):
+            winreg.SetValueEx(k, name, 0, winreg.REG_SZ, val)
+        for name, val in (("NoModify", 1), ("NoRepair", 1), ("EstimatedSize", exe.stat().st_size // 1024)):
+            winreg.SetValueEx(k, name, 0, winreg.REG_DWORD, val)
+
+def install():
+    dst = INSTALL_DIR / f"{APP}.exe"
+    stop_running()
+    INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(sys.executable, dst)
+    _ps(_LINKS + f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut($l); $s.TargetPath = {_psq(dst)}; "
+                 f"$s.WorkingDirectory = {_psq(INSTALL_DIR)}; $s.Description = {_psq(TITLE)}; $s.Save() }}")
+    register(dst)
+    set_autostart(True, f'"{dst}"')
+    subprocess.Popen([str(dst), "--installed"], close_fds=True)
+
+def uninstall():
+    u = ctypes.windll.user32
+    if u.MessageBoxW(None, f"Удалить {TITLE} вместе с настройками?", TITLE, 0x4 | 0x20 | 0x40000) != 6:   # IDYES
+        return
+    stop_running()
+    set_autostart(False)
+    _ps(_LINKS + "Remove-Item -LiteralPath $l -ErrorAction SilentlyContinue }")
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY)
+    except OSError:
+        pass
+    shutil.rmtree(CFG.parent, ignore_errors=True)
+    if Path(sys.executable).parent == INSTALL_DIR:   # we are that exe: the folder goes once we've exited
+        subprocess.Popen(f'cmd /c ping -n 3 127.0.0.1 >nul & rmdir /s /q "{INSTALL_DIR}"',
+                         creationflags=NO_WINDOW | DETACHED, close_fds=True)
+    u.MessageBoxW(None, f"{TITLE} удалён.", TITLE, 0x40 | 0x40000)
 
 
 # --- win32 ---
@@ -410,15 +539,19 @@ class App:
         self.mode = tk.StringVar(value="notch" if self.cfg.get("mode") == "notch" else "taskbar")
         self.autostart = autostart_enabled()
         # (icon, label, action, checked); None is a separator
-        self.menu_items = [
+        self.base_menu = [
             ("\ue72c", "Обновить", self.wake.set, None),
             None,
             (None, "На панели задач", lambda: self.set_mode("taskbar"), lambda: self.mode.get() == "taskbar"),
             (None, "Чёлка сверху", lambda: self.set_mode("notch"), lambda: self.mode.get() == "notch"),
             None,
             (None, "Запускать с Windows", self.toggle_autostart, lambda: self.autostart),
-            ("\ue7e8", "Выход", r.destroy, None),
+            (None, "Проверять обновления", self.toggle_updates, lambda: self.cfg.get("check_updates", True)),
+            ("\ue7e8", "Выход", self.quit, None),
         ]
+        self.update = self.update_seen = self.update_done = None
+        self.quit_ev, self.show_ev, self.quitting = named_event("quit"), named_event("show"), False
+        self.interval, self.polled_at = POLL_OFFLINE, 0.0
         self.menu_rows, self.menu_hover, self.menu_geom, self.card_geom = [], -1, None, None
         self.hit.bind("<Button-1>", lambda e: self.wake.set())
         self.hit.bind("<Button-3>", self.open_menu)
@@ -437,9 +570,48 @@ class App:
                 except OSError:
                     pass
             self.show_alert(None, "Готово! Заряд теперь здесь, у часов. Правый клик — меню", GREEN, 12)
+        if "--installed" in sys.argv:
+            self.show_alert(None, "Установлено. Заряд здесь, у часов, ярлык на рабочем столе", GREEN, 12)
 
         threading.Thread(target=self.poll_loop, daemon=True).start()
+        threading.Thread(target=self.update_loop, daemon=True).start()
         self.tick()
+
+    @property
+    def menu_items(self):
+        if not self.update:
+            return self.base_menu
+        return [("\ue896", f"Обновить программу до {self.update[0]}", self.start_update, None), None] + self.base_menu
+
+    def update_loop(self):
+        time.sleep(30)
+        while True:
+            if self.cfg.get("check_updates", True):
+                try:
+                    rel = latest_release()
+                    if rel and is_newer(rel[0], VERSION):
+                        self.update = rel
+                except Exception:
+                    pass              # offline, rate-limited, GitHub down: try tomorrow
+            time.sleep(24 * 3600)
+
+    def toggle_updates(self):
+        self.cfg["check_updates"] = not self.cfg.get("check_updates", True)
+        save_cfg(self.cfg)
+
+    def start_update(self):
+        if not getattr(sys, "frozen", False):          # running from source: just show the release
+            os.startfile(f"https://github.com/{REPO}/releases/latest")
+            return
+        self.show_alert(None, "Скачиваю обновление…", GREY, 60)
+        ver, url, sha = self.update
+
+        def work():
+            try:
+                self.update_done = download_update(url, sha)
+            except Exception as e:
+                self.update_done = e
+        threading.Thread(target=work, daemon=True).start()
 
     def px(self, v):
         return int(round(v * self.s))
@@ -451,9 +623,17 @@ class App:
                 self.result = read_all()      # picked up by tick() on the UI thread
             except Exception:
                 pass
-            self.updated = time.strftime("%H:%M")
-            self.wake.wait(POLL_S)
+            self.updated, self.polled_at = time.strftime("%H:%M"), time.time()
+            self.wake.wait(self.interval)
             self.wake.clear()
+
+    def poll_interval(self):
+        """Shortest interval any device needs (runs on the UI thread, read by the poll thread)."""
+        def need(st):
+            if not isinstance(st, tuple):
+                return POLL_OFFLINE           # only the dongle answers, the headset is not woken
+            return POLL_CHARGING if st[1] else POLL_ON_BATTERY
+        return min((need(d.state) for d in self.devices.values()), default=POLL_OFFLINE)
 
     def apply(self, result):
         seen = set()
@@ -468,7 +648,7 @@ class App:
                 try:                          # continue the measurement from the previous run
                     track = self.cfg.get("track")
                     t0, l0, last = track.get(name, (0, 0, 0)) if isinstance(track, dict) else (0, 0, 0)
-                    if time.time() - float(last) < 600:
+                    if time.time() - float(last) < SLEEP_GAP:
                         dev.hist, dev.seen_at = [(float(t0), int(l0))], float(last)
                 except (TypeError, ValueError):
                     pass
@@ -488,7 +668,7 @@ class App:
             self.save_track(dev, [])          # time switched off isn't discharge
             return
         level, charging = st
-        gap = now - dev.seen_at > 600         # PC was asleep
+        gap = now - dev.seen_at > SLEEP_GAP        # PC was asleep
         dev.seen_at = now
         for th in LOW_LEVELS:                 # charged behind our back: re-arm
             if level > th + 2:
@@ -601,15 +781,36 @@ class App:
             import traceback
             CFG.parent.mkdir(parents=True, exist_ok=True)
             (CFG.parent / "error.log").write_text(traceback.format_exc(), "utf-8")
-        self.root.after(500, self.tick)
+        if not self.quitting:
+            self.root.after(500, self.tick)
+
+    def quit(self):
+        self.quitting = True
+        self.root.destroy()
 
     def update_ui(self):
+        if k32.WaitForSingleObject(self.quit_ev, 0) == 0:          # installer / uninstaller asks us to go
+            self.quit()
+            return
+        if k32.WaitForSingleObject(self.show_ev, 0) == 0:          # the shortcut was clicked again
+            k32.ResetEvent(self.show_ev)
+            self.show_alert(None, "Программа уже работает: заряд здесь, у часов", GREEN, 6)
         res = self.result
         if res is not self.handled:
             self.handled = res
             self.apply(res)
         if self.alert and self.alert[3] and time.time() > self.alert[3]:
             self.alert = None
+        if self.update and self.update_seen != self.update[0]:
+            self.update_seen = self.update[0]
+            self.show_alert(None, f"Вышла версия {self.update[0]}: правый клик → «Обновить программу»", GREEN, 10)
+        done, self.update_done = self.update_done, None
+        if isinstance(done, Path):
+            subprocess.Popen([str(done), "--after-update"], close_fds=True)
+            self.quit()
+            return
+        if isinstance(done, Exception):
+            self.show_alert(None, f"Не удалось обновить: {str(done)[:60]}", RED, 10)
         dpi = u32.GetDpiForWindow(self.hwnd)
         if dpi and abs(dpi / 96 - self.s) > 0.01:          # scale changed
             self.s = dpi / 96
@@ -623,7 +824,11 @@ class App:
         pt = wt.POINT()
         u32.GetCursorPos(ctypes.byref(pt))
         card_up = self.card.winfo_ismapped() and self.card_geom
+        was_hover = self.hover
         self.hover = bool(geom) and (inside(geom, pt) or bool(card_up and inside(self.card_geom, pt, self.px(12))))
+        if self.hover and not was_hover and time.time() - self.polled_at > HOVER_REFRESH:
+            self.wake.set()                   # someone is looking: get fresh numbers
+        self.interval = self.poll_interval()
         if geom:
             self.draw_widget(geom)
         self.show(self.root, bool(geom))
@@ -840,8 +1045,25 @@ if __name__ == "__main__":
         print(report)
         CFG.parent.mkdir(parents=True, exist_ok=True)
         (CFG.parent / "diagnostics.txt").write_text(report, "utf-8")
+    elif "--uninstall" in sys.argv:
+        uninstall()
+    elif getattr(sys, "frozen", False) and Path(sys.executable).parent != INSTALL_DIR and "--portable" not in sys.argv:
+        install()
     else:
-        ctypes.windll.kernel32.CreateMutexW(None, False, f"Local\\{APP}")
-        if ctypes.windll.kernel32.GetLastError() == 183:      # ERROR_ALREADY_EXISTS
+        waiting = "--after-update" in sys.argv or "--installed" in sys.argv   # the old copy may still be closing
+        for _ in range(40 if waiting else 1):
+            mutex = k32.CreateMutexW(None, False, f"Local\\{APP}")
+            if k32.GetLastError() != 183:                             # ERROR_ALREADY_EXISTS
+                break
+            k32.CloseHandle(mutex)
+            time.sleep(0.25)
+        else:
+            k32.SetEvent(named_event("show"))                         # already running: let it show itself
             sys.exit(0)
+        if getattr(sys, "frozen", False):
+            Path(sys.executable).with_name(f"{Path(sys.executable).stem}.old.exe").unlink(missing_ok=True)
+            try:
+                register(Path(sys.executable))                        # keeps the version shown in Settings current
+            except OSError:
+                pass
         App().root.mainloop()

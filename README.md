@@ -6,16 +6,35 @@ Shows the battery level of wireless Razer headsets, mice and keyboards on the Wi
 
 I wrote it because Synapse 4 doesn't know my Barracuda X 2.4 at all (its log says `supported type: unknown`), and Windows only reports battery for Bluetooth devices. The program asks the USB dongle directly.
 
-**[Download RazerBatteryIndicator.exe](../../releases/latest)** (Windows 10/11, nothing to install)
+**[Download RazerBatteryIndicator.exe](../../releases/latest)** (Windows 10/11)
+
+On the taskbar, next to the tray:
+
+![Battery level on the taskbar](docs/taskbar.png)
+
+Hovering over it opens a card:
+
+![Card with the battery bar and status](docs/card.png)
 
 ## Установка
 
 1. Откройте страницу [последней версии](../../releases/latest) и скачайте файл `RazerBatteryIndicator.exe`. Если браузер не даёт скачать exe, возьмите `RazerBatteryIndicator.zip` и распакуйте его.
-2. Перенесите файл туда, где он будет лежать постоянно, например в «Документы». Из папки «Загрузки» его потом легко случайно удалить.
-3. Запустите его двойным щелчком. Если появится синее окно «Windows защитила ваш компьютер», нажмите «Подробнее», затем «Выполнить в любом случае». Так Windows реагирует на любую программу без платной цифровой подписи.
-4. Всё. Справа внизу, рядом с часами, появится заряд ваших устройств. Программа сама запускается вместе с Windows. Если это не нужно, нажмите на процент правой кнопкой и снимите галочку «Запускать с Windows».
+2. Запустите его двойным щелчком. Скорее всего, Windows покажет синее окно «Windows защитила ваш компьютер»: нажмите «Подробнее», затем «Выполнить в любом случае» (см. ниже, почему так).
+3. Всё. Программа сама установится: появятся ярлыки на рабочем столе и в меню «Пуск», а справа внизу, рядом с часами, заряд ваших устройств. Она будет запускаться вместе с Windows. Если это не нужно, нажмите на процент правой кнопкой и снимите галочку «Запускать с Windows». Скачанный файл после этого можно удалить.
 
 Права администратора, Python и Synapse не нужны.
+
+### Почему Windows или антивирус ругаются
+
+Чтобы Windows доверяла программе, разработчик покупает сертификат цифровой подписи. Он стоит несколько сотен долларов в год, а эта программа бесплатная и его нет. Поэтому:
+
+- Windows SmartScreen покажет «Windows защитила ваш компьютер» и «Неизвестный издатель». Это значит только, что файл не подписан, а не что в нём вирус. Нажмите «Подробнее», затем «Выполнить в любом случае».
+- Браузер может написать, что файл «обычно не скачивают» или что он «может быть опасен». Выберите «Сохранить» или «Всё равно сохранить». Если exe не скачивается совсем, возьмите zip.
+- Некоторые антивирусы ошибочно помечают программы, собранные PyInstaller, как подозрительные. Это известная ложная тревога.
+
+Как убедиться, что файл настоящий: весь код открыт и лежит в этом репозитории (один файл `razer_battery.py`). У каждого релиза указана контрольная сумма SHA-256; проверить свой файл можно командой `certutil -hashfile RazerBatteryIndicator.exe SHA256` и сравнить с релизом. Программа не трогает ничего, кроме своей папки, ярлыков и автозапуска, и в интернет ходит только к GitHub за обновлениями.
+
+Удалить программу можно как любую другую: «Параметры» → «Приложения» → «Установленные приложения» → Razer Battery Tray → «Удалить». Вместе с ней удаляются ярлыки, автозапуск и настройки.
 
 ## What you get
 
@@ -27,18 +46,17 @@ A warning pops up at 20% and again at 10%, and once more when a device finishes 
 
 Left click refreshes. Right click opens the menu: refresh, taskbar or "notch" mode (a small black pill at the top of the screen), start with Windows, exit.
 
-It polls once a minute and uses about 20 MB of RAM. CPU use is close to zero.
+It uses about 20 MB of RAM and close to zero CPU. Every battery query wakes the headset's radio, so while a device runs on battery it is asked only every 20 minutes, which leaves the headset free to switch itself off when idle. Hovering over the widget fetches fresh numbers right away. While charging it checks every 5 minutes, and a device that's off is looked for once a minute (that only talks to the dongle).
 
 ## Install
 
 1. Download `RazerBatteryIndicator.exe` from the [latest release](../../releases/latest). If your browser blocks exe downloads, take `RazerBatteryIndicator.zip` and unpack it.
-2. Put it somewhere permanent, e.g. Documents, not Downloads.
-3. Double-click it. Windows SmartScreen may say it protected your PC because the exe isn't signed: click "More info", then "Run anyway". Some antivirus programs also flag PyInstaller builds by mistake. If you don't trust the exe, run it from source (below), it's one Python file.
-4. That's it. The battery level shows up next to the clock, and the program starts with Windows from now on. To stop that, right click the percentage and untick "Запускать с Windows".
+2. Double-click it. Windows SmartScreen will most likely say "Windows protected your PC": click "More info", then "Run anyway". This happens because the exe isn't signed with a paid code-signing certificate (a few hundred dollars a year, too much for a free tool), not because anything is wrong with it. Browsers may also warn that the file "isn't commonly downloaded", and some antivirus programs flag PyInstaller builds by mistake. To check the file, compare `certutil -hashfile RazerBatteryIndicator.exe SHA256` with the hash in the release notes, or run it from source (below); it's one Python file.
+3. That's it. The exe installs itself into `%LOCALAPPDATA%\Programs\Razer Battery Tray`, adds shortcuts to the desktop and the Start menu, starts with Windows from now on and shows the battery level next to the clock. You can delete the downloaded file afterwards. To skip autostart, right click the percentage and untick "Запускать с Windows".
 
-Windows 10 or 11, no admin rights required. The interface is in Russian for now.
+Windows 10 or 11, no admin rights required. The interface is in Russian for now. Running a newer downloaded exe the same way updates the installed copy. Start it with `--portable` if you'd rather run it from where it is without installing.
 
-To remove it: untick "Запускать с Windows", choose "Выход" in the same menu, then delete the exe and the folder `%APPDATA%\RazerBatteryIndicator`.
+To remove it, use Settings, Apps, Installed apps, Razer Battery Tray, Uninstall. That removes the program, its shortcuts, autostart and settings.
 
 ## Supported devices
 
@@ -59,7 +77,9 @@ If your device doesn't show up or shows nonsense, run `RazerBatteryIndicator.exe
 
 **Is the percentage exact?** It is whatever the device's firmware reports. The program doesn't calculate it.
 
-**Does it keep my headset from turning off?** Not sure yet. To read the battery the program has to talk to the headset over the radio once a minute, and I'm still checking whether the Barracuda X counts that as activity and skips its auto power-off. This answer will be updated.
+**Does it keep my headset from turning off?** Talking to the headset seems to count as activity: queried once a minute, my Barracuda X stayed on for over 20 minutes without sound, although its auto-off timer is set to 15. That's why the program asks only every 20 minutes while a device runs on battery. The headset can switch itself off between two queries, and the program then shows it as off.
+
+**Does it update itself?** Once a day it asks GitHub whether a newer release exists. If one does, the card says so and the right-click menu gets an "Обновить программу" item. Clicking it downloads the new exe, checks it against the SHA-256 in the release notes and replaces the old file in place, so autostart keeps working. Nothing is installed without that click. The request goes to `api.github.com` and carries no information about you or your devices. You can turn it off with "Проверять обновления" in the menu. Version 1.0.0 has no updater, so from 1.0.0 you need to download the new version by hand once.
 
 **Can it run next to Synapse?** Synapse 4 ignores the Barracuda X 2.4, so with that headset there's nothing to clash with. I haven't tried it alongside Synapse on devices Synapse does support.
 
