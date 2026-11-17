@@ -32,7 +32,7 @@ POLL_ON_BATTERY, POLL_CHARGING, POLL_OFFLINE, HOVER_REFRESH = 20 * 60, 5 * 60, 6
 SLEEP_GAP = 2 * POLL_ON_BATTERY + 60     # longer silence than this means the PC slept, not that we waited
 LOW_LEVELS = (20, 10)
 APP = "RazerBatteryIndicator"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 REPO = "NikolayYaroslavcev/razer-battery-tray"
 CFG = Path(os.environ["APPDATA"]) / APP / "config.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -352,6 +352,12 @@ def register(exe):
         for name, val in (("NoModify", 1), ("NoRepair", 1), ("EstimatedSize", exe.stat().st_size // 1024)):
             winreg.SetValueEx(k, name, 0, winreg.REG_DWORD, val)
 
+def launch(exe, *args):
+    # without the reset a pyinstaller exe started by another one reuses its temp folder, and the parent then
+    # can't delete that folder on exit ("Failed to remove temporary directory")
+    env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
+    subprocess.Popen([str(exe), *args], env=env, close_fds=True)
+
 def remove_old_exe():
     """After an update the previous exe stays locked until its loader process exits; keep trying for a minute."""
     old = Path(sys.executable).with_name(f"{Path(sys.executable).stem}.old.exe")
@@ -371,7 +377,7 @@ def install():
                  f"$s.WorkingDirectory = {_psq(INSTALL_DIR)}; $s.Description = {_psq(TITLE)}; $s.Save() }}")
     register(dst)
     set_autostart(True, f'"{dst}"')
-    subprocess.Popen([str(dst), "--installed"], close_fds=True)
+    launch(dst, "--installed")
 
 def uninstall():
     u = ctypes.windll.user32
@@ -823,7 +829,7 @@ class App:
             self.show_alert(None, f"Вышла версия {self.update[0]}: правый клик → «Обновить программу»", GREEN, 10)
         done, self.update_done = self.update_done, None
         if isinstance(done, Path):
-            subprocess.Popen([str(done), "--after-update"], close_fds=True)
+            launch(done, "--after-update")
             self.quit()
             return
         if isinstance(done, Exception):

@@ -4,10 +4,8 @@ Download `RazerBatteryIndicator.exe` and double-click it. It installs itself: sh
 
 Windows SmartScreen will warn because the file isn't signed with a paid certificate: "More info", then "Run anyway". / SmartScreen предупредит, что файл без платной подписи: «Подробнее», затем «Выполнить в любом случае».
 
-What's new in 1.2.1:
-- Fixed a crash right after an in-app update: the new version tried to delete the old exe while it was still closing.
-- Unexpected startup errors go to %APPDATA%\RazerBatteryIndicator\error.log instead of a Python error window.
-
-If 1.2.0 showed "Unhandled exception" after updating, just start it again from the desktop shortcut; the update itself went through.
+What's new in 1.2.2:
+- No more "Failed to remove temporary directory" warning after installing or updating. The copy started by the installer or updater used to share the old copy's temporary folder.
+- Updating from 1.2.1 may still show that warning once, because the old version starts the new one. Click OK; the update is fine.
 
 Tested on Razer Barracuda X 2.4 only.
