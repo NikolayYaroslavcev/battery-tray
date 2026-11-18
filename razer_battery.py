@@ -1,4 +1,4 @@
-"""Battery level of wireless Razer headsets, mice and keyboards on the Windows taskbar, plus Bluetooth, Logitech and HeadsetControl devices.
+"""Battery level of wireless Razer headsets, mice and keyboards on the Windows taskbar, plus Bluetooth, Logitech, DualShock 4 and HeadsetControl devices.
 
 Protocol by what the HID report descriptor offers:
   output report 2    PA frames (Barracuda X 0550, BlackShark V2 Pro 2023)
@@ -32,7 +32,7 @@ POLL_ON_BATTERY, POLL_CHARGING, POLL_OFFLINE, HOVER_REFRESH = 20 * 60, 5 * 60, 6
 SLEEP_GAP = 2 * POLL_ON_BATTERY + 60     # longer silence than this means the PC slept, not that we waited
 LOW_LEVELS = (20, 10)
 APP = "RazerBatteryIndicator"
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 REPO = "NikolayYaroslavcev/razer-battery-tray"
 CFG = Path(os.environ["APPDATA"]) / APP / "config.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -220,7 +220,7 @@ def read_all():
         _slow[:] = [time.time(), _optional(read_logitech) + _optional(read_headsetcontrol)]
     razer = [r for _, _, n, _ in out if (r := n.lower().removeprefix("razer ")) not in ("", "device")]
     bt = [e for e in _optional(read_bluetooth) if not any(r in e[2].lower() for r in razer)]  # same headset via BT
-    return out + bt + _slow[1]
+    return out + bt + _optional(read_dualshock) + _slow[1]
 
 
 SLOW_EVERY, _slow = 5 * 60, [0.0, []]
@@ -385,6 +385,47 @@ def read_logitech():
     return out
 
 _logi_seen = {}                               # slot -> (kind, name) of devices that answered before
+
+
+DS4_PIDS = {0x05C4, 0x09CC}                  # DualShock 4 v1, v2
+
+def _ds4_state(h):
+    """Status byte of the input reports the pad streams anyway; nothing is sent to it."""
+    for _ in range(10):
+        r = h.read(80, 100)
+        if not r:
+            return None
+        if r[0] == 0x11 and len(r) > 32:         # Bluetooth, full report
+            st = r[32]
+        elif r[0] == 0x01 and len(r) > 30:       # USB (the short Bluetooth 0x01 report has no battery)
+            st = r[30]
+        else:
+            continue
+        level, cable = st & 0x0F, bool(st & 0x10)  # levels as in Linux hid-sony: 0-10, 11 = full on cable
+        return (100 if level >= 10 else level * 10 + 5), cable and level < 11
+    return None
+
+def read_dualshock():
+    pads = {}
+    for d in hid.enumerate(0x054C):
+        if d["product_id"] in DS4_PIDS and (d["usage_page"], d["usage"]) == (1, 5):
+            key = d["serial_number"] or hashlib.md5(d["path"]).hexdigest()[:12]   # Bluetooth gives the MAC
+            pads.setdefault(key, d)                                # the same pad twice: once
+    out = []
+    for serial, d in pads.items():
+        h = hid.device()
+        try:
+            h.open_path(d["path"])
+            state = _ds4_state(h)
+        except (OSError, ValueError):
+            continue
+        finally:
+            h.close()
+        if state:
+            out.append((f"ds4:{serial}", "gamepad", "DualShock 4", state))
+    if len(out) > 1:                          # two pads need different names: alerts and history go by name
+        out = [(pid, k, f"{n} ({pid[-4:].upper()})", st) for pid, k, n, st in out]
+    return out
 
 
 def read_headsetcontrol():
@@ -682,9 +723,9 @@ def own_by_taskbar(hwnd):
 
 GREEN, GREEN_DIM, AMBER, RED, GREY = "#30d158", "#1f7a37", "#ffd60a", "#ff453a", "#8e8e93"
 BOLT = "\ue945"
-ICONS = {"headset": "\ue7f6", "mouse": "\ue962", "keyboard": "\ue765"}   # dict order = display order
+ICONS = {"headset": "\ue7f6", "mouse": "\ue962", "keyboard": "\ue765", "gamepad": "\ue7fc"}   # dict order = display order
 OFFLINE_TEXT = {"headset": "Наушники выключены или вне зоны", "mouse": "Мышь выключена или спит",
-                "keyboard": "Клавиатура выключена или спит"}
+                "keyboard": "Клавиатура выключена или спит", "gamepad": "Геймпад выключен"}
 
 
 def fmt_hours(h):
