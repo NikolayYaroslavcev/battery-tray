@@ -93,8 +93,6 @@ If your device doesn't show up or shows nonsense, run `RazerBatteryIndicator.exe
 
 **Can a script or Rainmeter read the level?** `RazerBatteryIndicator.exe --once --json` writes the levels to `%APPDATA%\RazerBatteryIndicator\diagnostics.json`, for example `{"version": "1.3.0", "devices": [{"name": "Razer Barracuda X", "kind": "headset", "pid": "0550", "online": true, "level": 87, "charging": false}]}`. The widget's window title also holds the level, so screen readers and UI Automation tools can read it.
 
-**Why does the level vanish while the volume panel is open?** While a taskbar panel such as volume or Quick Settings is open, Windows 11 draws the taskbar above every other window, including always-on-top ones, so the widget is hidden. It comes back within a second after the panel closes. Other taskbar widgets on Windows 11 behave the same way. If you want the level visible at all times, pick "Чёлка сверху" in the right-click menu.
-
 **Can it run next to Synapse?** Synapse 4 ignores the Barracuda X 2.4, so with that headset there's nothing to clash with. I haven't tried it alongside Synapse on devices Synapse does support.
 
 ## Run from source

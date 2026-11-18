@@ -32,7 +32,7 @@ POLL_ON_BATTERY, POLL_CHARGING, POLL_OFFLINE, HOVER_REFRESH = 20 * 60, 5 * 60, 6
 SLEEP_GAP = 2 * POLL_ON_BATTERY + 60     # longer silence than this means the PC slept, not that we waited
 LOW_LEVELS = (20, 10)
 APP = "RazerBatteryIndicator"
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 REPO = "NikolayYaroslavcev/razer-battery-tray"
 CFG = Path(os.environ["APPDATA"]) / APP / "config.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -413,6 +413,8 @@ u32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
 u32.GetWindowLongW.argtypes = [wt.HWND, ctypes.c_int]
 u32.SetWindowLongW.argtypes = [wt.HWND, ctypes.c_int, wt.LONG]
 u32.SetWindowTextW.argtypes = [wt.HWND, wt.LPCWSTR]
+u32.GetWindow.restype, u32.GetWindow.argtypes = wt.HWND, [wt.HWND, wt.UINT]
+u32.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int, ctypes.c_ssize_t]
 u32.SetWindowPos.argtypes = [wt.HWND, wt.HWND] + [ctypes.c_int] * 4 + [wt.UINT]
 u32.GetDC.restype, u32.GetDC.argtypes = wt.HDC, [wt.HWND]
 u32.GetAsyncKeyState.restype, u32.GetAsyncKeyState.argtypes = ctypes.c_short, [ctypes.c_int]
@@ -479,6 +481,13 @@ def dwm_style(hwnd, dark):
 def put_on_top(hwnd, g=None):
     flags = 0x10 if g else 0x1 | 0x2 | 0x10                          # SWP_NOACTIVATE [| NOSIZE | NOMOVE]
     u32.SetWindowPos(hwnd, wt.HWND(-1), *(g or (0, 0, 0, 0)), flags)
+
+def own_by_taskbar(hwnd):
+    # While Start, a tray flyout or the taskbar itself has focus, Windows 11 lifts the taskbar above every
+    # topmost window. Windows it owns ride along. Re-checked each tick: explorer may have restarted.
+    tb = u32.FindWindowW("Shell_TrayWnd", None)
+    if tb and u32.GetWindow(hwnd, 4) != tb:                          # GW_OWNER
+        u32.SetWindowLongPtrW(hwnd, -8, tb)                          # GWLP_HWNDPARENT
 
 
 # --- UI ---
@@ -866,6 +875,7 @@ class App:
         if geom:
             for win, hwnd in ((self.root, self.hwnd), (self.hit, self.hit_hwnd)):
                 self.set_window(win, geom)
+                own_by_taskbar(hwnd)
                 put_on_top(hwnd, geom)
         if self.menu_open:
             if geom:
