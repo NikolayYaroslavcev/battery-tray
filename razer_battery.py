@@ -405,14 +405,18 @@ def _ds4_state(h):
         return (100 if level >= 10 else level * 10 + 5), cable and level < 11
     return None
 
-def read_dualshock():
+def ds4_pads():
+    """Only lists devices, nothing is opened: cheap enough to watch for a pad being swapped."""
     pads = {}
     for d in hid.enumerate(0x054C):
         if d["product_id"] in DS4_PIDS and (d["usage_page"], d["usage"]) == (1, 5):
             key = d["serial_number"] or hashlib.md5(d["path"]).hexdigest()[:12]   # Bluetooth gives the MAC
             pads.setdefault(key, d)                                # the same pad twice: once
+    return pads
+
+def read_dualshock():
     out = []
-    for serial, d in pads.items():
+    for serial, d in ds4_pads().items():
         h = hid.device()
         try:
             h.open_path(d["path"])
@@ -422,9 +426,8 @@ def read_dualshock():
         finally:
             h.close()
         if state:
-            out.append((f"ds4:{serial}", "gamepad", "DualShock 4", state))
-    if len(out) > 1:                          # two pads need different names: alerts and history go by name
-        out = [(pid, k, f"{n} ({pid[-4:].upper()})", st) for pid, k, n, st in out]
+            # each pad its own name: alerts and discharge history go by name, a swapped pad must not inherit them
+            out.append((f"ds4:{serial}", "gamepad", f"DualShock 4 ({serial[-4:].upper()})", state))
     return out
 
 
@@ -835,6 +838,7 @@ class App:
             self.show_alert(None, "Установлено. Заряд здесь, у часов, ярлык на рабочем столе", GREEN, 12)
 
         threading.Thread(target=self.poll_loop, daemon=True).start()
+        threading.Thread(target=self.pad_watch, daemon=True).start()
         threading.Thread(target=self.update_loop, daemon=True).start()
         self.tick()
 
@@ -887,6 +891,19 @@ class App:
             self.updated, self.polled_at = time.strftime("%H:%M"), time.time()
             self.wake.wait(self.interval)
             self.wake.clear()
+
+    def pad_watch(self):
+        """A pad connected, removed or swapped: read now, not at the next 20-minute poll."""
+        last = None
+        while True:
+            try:
+                pads = set(ds4_pads())
+                if last is not None and pads != last:
+                    self.wake.set()
+                last = pads
+            except Exception:
+                pass
+            time.sleep(3)
 
     def poll_interval(self):
         """Shortest interval any device needs (runs on the UI thread, read by the poll thread)."""
