@@ -81,7 +81,7 @@ The program reads each dongle's HID report descriptor and picks the protocol fro
 
 I only own the Barracuda X 2.4, so everything else is written from protocol notes by other people and may need fixes. Wired mice and keyboards are skipped on purpose, because they answer the battery request with garbage.
 
-If your device doesn't show up or shows nonsense, run `RazerBatteryIndicator.exe --once`. It saves what it found to `%APPDATA%\RazerBatteryIndicator\diagnostics.txt`. Then [report the device](../../issues/new?template=device.yml) with that file and your device's `VID:PID` (Device Manager, the device, Details, Hardware Ids).
+If your device doesn't show up or shows nonsense, run `RazerBatteryIndicator.exe --once`. It saves to `%APPDATA%\RazerBatteryIndicator\diagnostics.txt` the program version, the Windows build and every Razer HID interface it sees, with its `VID:PID`, including the ones it skipped. Then [report the device](../../issues/new?template=device.yml) with that file.
 
 ## Questions
 
@@ -90,6 +90,8 @@ If your device doesn't show up or shows nonsense, run `RazerBatteryIndicator.exe
 **Does it keep my headset from turning off?** Talking to the headset seems to count as activity: queried once a minute, my Barracuda X stayed on for over 20 minutes without sound, although its auto-off timer is set to 15. That's why the program asks only every 20 minutes while a device runs on battery. The headset can switch itself off between two queries, and the program then shows it as off.
 
 **Does it update itself?** Once a day it asks GitHub whether a newer release exists. If one does, the card says so and the right-click menu gets an "Обновить программу" item. Clicking it downloads the new exe, checks it against the SHA-256 in the release notes and replaces the old file in place, so autostart keeps working. Nothing is installed without that click. The request goes to `api.github.com` and carries no information about you or your devices. You can turn it off with "Проверять обновления" in the menu. Version 1.0.0 has no updater, so from 1.0.0 you need to download the new version by hand once.
+
+**Can a script or Rainmeter read the level?** `RazerBatteryIndicator.exe --once --json` writes the levels to `%APPDATA%\RazerBatteryIndicator\diagnostics.json`, for example `{"version": "1.3.0", "devices": [{"name": "Razer Barracuda X", "kind": "headset", "pid": "0550", "online": true, "level": 87, "charging": false}]}`. The widget's window title also holds the level, so screen readers and UI Automation tools can read it.
 
 **Can it run next to Synapse?** Synapse 4 ignores the Barracuda X 2.4, so with that headset there's nothing to clash with. I haven't tried it alongside Synapse on devices Synapse does support.
 
@@ -103,7 +105,7 @@ python -m venv .venv
 .venv\Scripts\pythonw razer_battery.py
 ```
 
-`python razer_battery.py --once` prints what it finds and exits. `--quit` closes a running copy, `--portable` runs the exe without installing it.
+`python razer_battery.py --once` prints what it finds and exits, add `--json` for JSON. `--quit` closes a running copy, `--portable` runs the exe without installing it.
 
 To build the exe: `pip install -r requirements-build.txt`, `python make_icon.py`, then `pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py`.
 

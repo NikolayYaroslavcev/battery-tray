@@ -13,16 +13,16 @@ body:
     id: ids
     attributes:
       label: VID:PID
-      description: Device Manager > your dongle > Properties > Details > Hardware Ids, e.g. USB\VID_1532&PID_0555 is 1532:0555
+      description: Already in diagnostics.txt below. Otherwise Device Manager > your dongle > Properties > Details > Hardware Ids, e.g. USB\VID_1532&PID_0555 is 1532:0555
       placeholder: "1532:0555"
-    validations:
-      required: true
   - type: textarea
     id: diagnostics
     attributes:
       label: diagnostics.txt
       description: Run `RazerBatteryIndicator.exe --once`, then paste the contents of %APPDATA%\RazerBatteryIndicator\diagnostics.txt
       render: text
+    validations:
+      required: true
   - type: textarea
     id: what
     attributes:

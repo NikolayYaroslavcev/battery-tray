@@ -32,7 +32,7 @@ POLL_ON_BATTERY, POLL_CHARGING, POLL_OFFLINE, HOVER_REFRESH = 20 * 60, 5 * 60, 6
 SLEEP_GAP = 2 * POLL_ON_BATTERY + 60     # longer silence than this means the PC slept, not that we waited
 LOW_LEVELS = (20, 10)
 APP = "RazerBatteryIndicator"
-VERSION = "1.2.2"
+VERSION = "1.3.0"
 REPO = "NikolayYaroslavcev/razer-battery-tray"
 CFG = Path(os.environ["APPDATA"]) / APP / "config.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -347,7 +347,9 @@ def register(exe):
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as k:
         for name, val in (("DisplayName", TITLE), ("DisplayVersion", VERSION), ("Publisher", "NikolayYaroslavcev"),
                           ("DisplayIcon", f"{exe},0"), ("InstallLocation", str(exe.parent)),
-                          ("UninstallString", f'"{exe}" --uninstall'), ("URLInfoAbout", f"https://github.com/{REPO}")):
+                          ("UninstallString", f'"{exe}" --uninstall'),
+                          ("QuietUninstallString", f'"{exe}" --uninstall --silent'),
+                          ("URLInfoAbout", f"https://github.com/{REPO}")):
             winreg.SetValueEx(k, name, 0, winreg.REG_SZ, val)
         for name, val in (("NoModify", 1), ("NoRepair", 1), ("EstimatedSize", exe.stat().st_size // 1024)):
             winreg.SetValueEx(k, name, 0, winreg.REG_DWORD, val)
@@ -381,7 +383,8 @@ def install():
 
 def uninstall():
     u = ctypes.windll.user32
-    if u.MessageBoxW(None, f"Удалить {TITLE} вместе с настройками?", TITLE, 0x4 | 0x20 | 0x40000) != 6:   # IDYES
+    quiet = "--silent" in sys.argv                   # winget uninstall
+    if not quiet and u.MessageBoxW(None, f"Удалить {TITLE} вместе с настройками?", TITLE, 0x4 | 0x20 | 0x40000) != 6:   # IDYES
         return
     stop_running()
     set_autostart(False)
@@ -394,7 +397,8 @@ def uninstall():
     if Path(sys.executable).parent == INSTALL_DIR:   # we are that exe: the folder goes once we've exited
         subprocess.Popen(f'cmd /c ping -n 3 127.0.0.1 >nul & rmdir /s /q "{INSTALL_DIR}"',
                          creationflags=NO_WINDOW | DETACHED, close_fds=True)
-    u.MessageBoxW(None, f"{TITLE} удалён.", TITLE, 0x40 | 0x40000)
+    if not quiet:
+        u.MessageBoxW(None, f"{TITLE} удалён.", TITLE, 0x40 | 0x40000)
 
 
 # --- win32 ---
@@ -408,6 +412,7 @@ u32.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
 u32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
 u32.GetWindowLongW.argtypes = [wt.HWND, ctypes.c_int]
 u32.SetWindowLongW.argtypes = [wt.HWND, ctypes.c_int, wt.LONG]
+u32.SetWindowTextW.argtypes = [wt.HWND, wt.LPCWSTR]
 u32.SetWindowPos.argtypes = [wt.HWND, wt.HWND] + [ctypes.c_int] * 4 + [wt.UINT]
 u32.GetDC.restype, u32.GetDC.argtypes = wt.HDC, [wt.HWND]
 u32.GetAsyncKeyState.restype, u32.GetAsyncKeyState.argtypes = ctypes.c_short, [ctypes.c_int]
@@ -551,6 +556,7 @@ class App:
         self.alert = None                                   # (pid or None, text, color, hide_at, seconds)
         self.hover, self.menu_open, self.phase = False, False, 0
         self.bg, self.bg_checked = "#1c1c1c", 0
+        self.name = None                                    # window title, what UI Automation reads
         self.wake = threading.Event()
 
         self.mode = tk.StringVar(value="notch" if self.cfg.get("mode") == "notch" else "taskbar")
@@ -854,6 +860,7 @@ class App:
         self.interval = self.poll_interval()
         if geom:
             self.draw_widget(geom)
+            self.set_names()
         self.show(self.root, bool(geom))
         self.show(self.hit, bool(geom))
         if geom:
@@ -872,6 +879,16 @@ class App:
             if self.alert and self.alert[3] is None:
                 self.alert = self.alert[:3] + (time.time() + self.alert[4], self.alert[4])
         self.show(self.card, card)
+
+    def set_names(self):
+        """The widget is a canvas, so screen readers and UI Automation only see the window title."""
+        name = "; ".join(f"{d.name} {text}" + ("" if isinstance(st, tuple) else ", не в сети")
+                         + (", заряжается" if isinstance(st, tuple) and st[1] else "")
+                         for d, (_, text, st) in zip(self.devices.values(), self.items())) or "Razer: нет устройств"
+        if name != self.name:
+            self.name = name
+            for hwnd in (self.hwnd, self.hit_hwnd):
+                u32.SetWindowTextW(hwnd, name)
 
     def show(self, win, on):
         if win.winfo_ismapped() != on:
@@ -1066,10 +1083,25 @@ class App:
 
 def main():
     if "--once" in sys.argv:          # diagnostics; the exe has no console, hence the file
-        report = "\n".join(map(str, read_all())) or "no wireless Razer devices found"
+        found = read_all()
+        if "--json" in sys.argv:      # for scripts, Rainmeter, agents
+            report, name = json.dumps({"version": VERSION, "devices": [
+                {"name": n, "kind": k, "pid": f"{pid:04X}", "online": isinstance(st, tuple),
+                 "level": st[0] if isinstance(st, tuple) else None,
+                 "charging": st[1] if isinstance(st, tuple) else None} for pid, k, n, st in found]},
+                ensure_ascii=False), "diagnostics.json"
+        else:                         # for bug reports: also the interfaces we didn't recognise
+            w = sys.getwindowsversion()
+            ifaces = [f"{VID:04X}:{d['product_id']:04X} if{d['interface_number']} usage {d['usage_page']:04X}:"
+                      f"{d['usage']:04X} {d.get('product_string')!r} -> {classify(d) or 'skipped'}"
+                      for d in hid.enumerate(VID)]
+            report = "\n".join([f"{APP} {VERSION}, Windows {w.major}.{w.minor}.{w.build}", "", "Found:"]
+                               + (list(map(str, found)) or ["no wireless Razer devices found"])
+                               + ["", "Razer HID interfaces:"] + (ifaces or ["none"]))
+            name = "diagnostics.txt"
         print(report)
         CFG.parent.mkdir(parents=True, exist_ok=True)
-        (CFG.parent / "diagnostics.txt").write_text(report, "utf-8")
+        (CFG.parent / name).write_text(report, "utf-8")
     elif "--quit" in sys.argv:
         stop_running()
     elif "--uninstall" in sys.argv:
