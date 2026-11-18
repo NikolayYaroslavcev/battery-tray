@@ -4,7 +4,8 @@ Download `RazerBatteryIndicator.exe` and double-click it. It installs itself: sh
 
 Windows SmartScreen will warn because the file isn't signed with a paid certificate: "More info", then "Run anyway". / SmartScreen предупредит, что файл без платной подписи: «Подробнее», затем «Выполнить в любом случае».
 
-What's new in 1.3.1:
-- The level no longer disappears while Start, the volume panel or another taskbar panel is open, or after closing one until you click elsewhere. Windows 11 lifts the taskbar above all other windows at those moments; the widget now belongs to the taskbar and stays visible with it.
+What's new in 1.4.0:
+- Other brands next to the Razer devices: Bluetooth headphones, mice and keyboards of any brand (the level Windows already knows), Logitech devices on a Unifying, Lightspeed or Bolt receiver, and headsets supported by HeadsetControl if you have it installed.
+- Logitech and Bluetooth support was tested without real devices (a simulated receiver and the Windows device properties). If something looks wrong, please report it.
 
-Tested on Razer Barracuda X 2.4 only.
+Razer support tested on the Barracuda X 2.4 only.

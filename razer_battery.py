@@ -1,4 +1,4 @@
-"""Battery level of wireless Razer headsets, mice and keyboards on the Windows taskbar.
+"""Battery level of wireless Razer headsets, mice and keyboards on the Windows taskbar, plus Bluetooth, Logitech and HeadsetControl devices.
 
 Protocol by what the HID report descriptor offers:
   output report 2    PA frames (Barracuda X 0550, BlackShark V2 Pro 2023)
@@ -32,7 +32,7 @@ POLL_ON_BATTERY, POLL_CHARGING, POLL_OFFLINE, HOVER_REFRESH = 20 * 60, 5 * 60, 6
 SLEEP_GAP = 2 * POLL_ON_BATTERY + 60     # longer silence than this means the PC slept, not that we waited
 LOW_LEVELS = (20, 10)
 APP = "RazerBatteryIndicator"
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 REPO = "NikolayYaroslavcev/razer-battery-tray"
 CFG = Path(os.environ["APPDATA"]) / APP / "config.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -216,6 +216,194 @@ def read_all():
         else:
             state = next((r for r in (_try(pid, d, kind) for d in cands) if r), "offline")
         out.append((pid, kind, name, state))
+    if time.time() - _slow[0] > SLOW_EVERY:   # these talk to devices, so not on every hover or offline poll
+        _slow[:] = [time.time(), _optional(read_logitech) + _optional(read_headsetcontrol)]
+    razer = [r for _, _, n, _ in out if (r := n.lower().removeprefix("razer ")) not in ("", "device")]
+    bt = [e for e in _optional(read_bluetooth) if not any(r in e[2].lower() for r in razer)]  # same headset via BT
+    return out + bt + _slow[1]
+
+
+SLOW_EVERY, _slow = 5 * 60, [0.0, []]
+
+def _optional(source):
+    try:
+        return source()
+    except Exception:                 # optional sources must never cost the Razer readings
+        return []
+
+
+# --- other brands; their pids are strings so they never mix with Razer product ids ---
+
+def _guess_kind(name):
+    n = name.lower()
+    if any(w in n for w in ("keyboard", "клавиат", "keys", "mechanical")):
+        return "keyboard"
+    return "mouse" if any(w in n for w in ("mouse", "мыш", "mx ", "trackball")) else "headset"
+
+
+class _PropKey(ctypes.Structure):
+    _fields_ = [("fmtid", ctypes.c_byte * 16), ("pid", wt.DWORD)]
+
+class _DevInfo(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("ClassGuid", ctypes.c_byte * 16), ("DevInst", wt.DWORD), ("Reserved", ctypes.c_void_p)]
+
+def _prop_key(guid, pid):
+    import uuid
+    return _PropKey((ctypes.c_byte * 16).from_buffer_copy(uuid.UUID(guid).bytes_le), pid)
+
+BT_BATTERY = _prop_key("104EA319-6EE2-4701-BD47-8DDBF425BBE5", 2)     # what Settings > Bluetooth shows
+BT_CONNECTED = _prop_key("83DA6326-97A6-4088-9453-A1923F573B29", 15)
+FRIENDLY_NAME = _prop_key("A45C254E-DF1C-4EFD-8020-67D146A850E0", 14)
+BT_CLASS = _prop_key("2BD67D8B-8BEB-48D5-87E0-6CDA3428040A", 10)       # Bluetooth class of device
+
+
+def read_bluetooth():
+    """Any brand: Windows already keeps the level of connected Bluetooth devices, nothing is woken."""
+    sa = ctypes.windll.setupapi
+    sa.SetupDiGetClassDevsW.restype = ctypes.c_void_p
+    sa.SetupDiGetClassDevsW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, wt.HWND, wt.DWORD]
+    sa.SetupDiEnumDeviceInfo.argtypes = [ctypes.c_void_p, wt.DWORD, ctypes.c_void_p]
+    sa.SetupDiGetDeviceInstanceIdW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_wchar_p, wt.DWORD, ctypes.c_void_p]
+    sa.SetupDiGetDevicePropertyW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                             ctypes.c_void_p, wt.DWORD, ctypes.c_void_p, wt.DWORD]
+    sa.SetupDiDestroyDeviceInfoList.argtypes = [ctypes.c_void_p]
+    hs = sa.SetupDiGetClassDevsW(None, None, None, 0x2 | 0x4)              # DIGCF_PRESENT | DIGCF_ALLCLASSES
+    if not hs or hs == ctypes.c_void_p(-1).value:
+        return []
+    info = _DevInfo(cbSize=ctypes.sizeof(_DevInfo))
+    def prop(key):
+        typ, buf, n = wt.DWORD(), ctypes.create_string_buffer(512), wt.DWORD()
+        ok = sa.SetupDiGetDevicePropertyW(hs, ctypes.byref(info), ctypes.byref(key), ctypes.byref(typ), buf, 512,
+                                          ctypes.byref(n), 0)
+        return buf.raw[:n.value] if ok else None
+    out, seen, i = [], set(), 0
+    try:
+        while sa.SetupDiEnumDeviceInfo(hs, i, ctypes.byref(info)):
+            i += 1
+            iid = ctypes.create_unicode_buffer(260)
+            if not sa.SetupDiGetDeviceInstanceIdW(hs, ctypes.byref(info), iid, 260, None) or \
+                    not iid.value.upper().startswith(("BTHENUM\\", "BTHLE\\", "BTHLEDEVICE\\", "BTHHFENUM\\")):
+                continue
+            level, raw_name = prop(BT_BATTERY), prop(FRIENDLY_NAME)
+            if not level or not raw_name:
+                continue
+            name = raw_name.decode("utf-16-le", "ignore").rstrip("\0").strip()
+            if name in seen:              # one device shows up as several service nodes
+                continue
+            seen.add(name)
+            cod = prop(BT_CLASS)
+            major = (int.from_bytes(cod[:4], "little") >> 8) & 0x1F if cod and len(cod) >= 4 else None
+            if major in (1, 2):           # computer, phone: not a peripheral of this PC
+                continue
+            kind = {0x04: "headset"}.get(major) or _guess_kind(name)
+            conn = prop(BT_CONNECTED)
+            state = "offline" if conn is not None and conn[:1] == b"\0" else (min(level[0], 100), False)
+            out.append((f"bt:{name}", kind, name, state))
+    finally:
+        sa.SetupDiDestroyDeviceInfoList(hs)
+    return out
+
+
+# Logitech Unifying / Lightspeed / Bolt receivers, HID++ 2.0 (as documented by Solaar). Written from the
+# protocol notes without the hardware, like the non-Barracuda Razer support.
+LOGI_VID = 0x046D
+LOGI_RECEIVERS = {0xC52B, 0xC532, 0xC534, 0xC539, 0xC53A, 0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547, 0xC548}
+LOGI_KINDS = {0: "keyboard", 3: "mouse", 4: "mouse", 5: "mouse", 8: "headset"}
+
+def _hidpp(h, idx, feature, fn, *args):
+    """One long HID++ request to device slot idx, reply payload or None (no device, off, unsupported)."""
+    code = (fn << 4) | 0x0A                                   # 0x0A: our software id
+    while h.read(20, 0):                                      # a late reply must not answer this request
+        pass
+    h.write([0x11, idx, feature, code, *args] + [0] * (16 - len(args)))
+    end = time.time() + 0.3
+    while time.time() < end:
+        r = h.read(20, 50)
+        if r and r[0] == 0x11 and r[1] == idx:
+            if r[2] == feature and r[3] == code:
+                return r[4:]
+            if r[2] == 0xFF:                                  # HID++ 2.0 error reply
+                return None
+    return None
+
+def _logi_device(h, idx):
+    def feat(code):
+        r = _hidpp(h, idx, 0, 0, code >> 8, code & 0xFF)     # root feature: index of a feature, 0 = none
+        return r[0] if r else None
+    level = None
+    fi = feat(0x1004)                                         # unified battery
+    if fi is None:
+        return None                                           # empty slot or device asleep
+    if fi and (r := _hidpp(h, idx, fi, 1)):
+        caps = _hidpp(h, idx, fi, 0)
+        if caps and caps[1] & 0x02:                           # reports a percentage
+            level = r[0]
+        else:                                                 # only full / good / low / critical
+            level = next((v for bit, v in ((8, 100), (4, 60), (2, 20), (1, 5)) if r[1] & bit), None)
+        charging = r[2] in (1, 2, 3)
+    elif (fi := feat(0x1000)) and (r := _hidpp(h, idx, fi, 0)):  # battery level status
+        level, charging = r[0], r[2] in (1, 2, 3, 4)
+    if level is None:
+        return None
+    name, kind = "Logitech", "mouse"
+    if (fi := feat(0x0005)) and (r := _hidpp(h, idx, fi, 0)):   # device name and type
+        buf = b""
+        while len(buf) < r[0]:
+            part = _hidpp(h, idx, fi, 1, len(buf))
+            if not part:
+                break
+            buf += bytes(part[:r[0] - len(buf)])
+        name = buf.decode("utf-8", "ignore").strip("\0 ") or name
+        if t := _hidpp(h, idx, fi, 2):
+            kind = LOGI_KINDS.get(t[0], kind)
+    if not name.lower().startswith("logitech"):
+        name = f"Logitech {name}"
+    return kind, name, (min(level, 100), charging)
+
+def read_logitech():
+    out = []
+    for d in hid.enumerate(LOGI_VID):
+        if d["product_id"] not in LOGI_RECEIVERS or (d["usage_page"], d["usage"]) != (0xFF00, 0x0002):
+            continue                                          # only the long-report HID++ collection
+        h = hid.device()
+        try:
+            h.open_path(d["path"])
+        except (OSError, ValueError):
+            continue
+        try:
+            for idx in range(1, 7):
+                key = f"lg:{d['product_id']:04X}:{idx}"
+                if res := _logi_device(h, idx):
+                    _logi_seen[key] = res[:2]
+                    out.append((key, *res))
+                elif key in _logi_seen:       # asleep: keep it, or its alerts would repeat on every wake
+                    out.append((key, *_logi_seen[key], "offline"))
+        except OSError:                       # receiver unplugged mid-read: keep what we got
+            pass
+        finally:
+            h.close()
+    return out
+
+_logi_seen = {}                               # slot -> (kind, name) of devices that answered before
+
+
+def read_headsetcontrol():
+    """SteelSeries, Logitech, Corsair, HyperX... headsets, if the user installed HeadsetControl."""
+    path = os.environ.get("PATH", "")         # explicit path: no lookup in the current folder
+    exe = shutil.which("headsetcontrol", path=path) or shutil.which("headsetcontrol-windows-x86_64", path=path)
+    if not exe:
+        return []
+    r = subprocess.run([exe, "-b", "-o", "json"], capture_output=True, timeout=10, creationflags=NO_WINDOW)
+    out = []
+    for d in json.loads(r.stdout).get("devices", []):
+        vid = d.get("id_vendor")
+        if (int(vid, 16) if isinstance(vid, str) else vid) == VID:
+            continue                                          # Razer: read directly above
+        b = d.get("battery") or {}
+        level, status = b.get("level"), b.get("status")
+        ok = status in ("BATTERY_AVAILABLE", "BATTERY_CHARGING") and isinstance(level, int) and level >= 0
+        state = (min(level, 100), status == "BATTERY_CHARGING") if ok else "offline"
+        out.append((f"hc:{d.get('id_vendor')}:{d.get('id_product')}", "headset", d.get("device") or "Headset", state))
     return out
 
 
@@ -661,11 +849,14 @@ class App:
 
     def poll_interval(self):
         """Shortest interval any device needs (runs on the UI thread, read by the poll thread)."""
-        def need(st):
+        def need(d):
+            st = d.state
+            if isinstance(d.pid, str):        # other brands must not make us wake the Razer radio more often
+                return POLL_ON_BATTERY
             if not isinstance(st, tuple):
                 return POLL_OFFLINE           # only the dongle answers, the headset is not woken
             return POLL_CHARGING if st[1] else POLL_ON_BATTERY
-        return min((need(d.state) for d in self.devices.values()), default=POLL_OFFLINE)
+        return min((need(d) for d in self.devices.values()), default=POLL_OFFLINE)
 
     def apply(self, result):
         seen = set()
@@ -1096,7 +1287,7 @@ def main():
         found = read_all()
         if "--json" in sys.argv:      # for scripts, Rainmeter, agents
             report, name = json.dumps({"version": VERSION, "devices": [
-                {"name": n, "kind": k, "pid": f"{pid:04X}", "online": isinstance(st, tuple),
+                {"name": n, "kind": k, "pid": pid if isinstance(pid, str) else f"{pid:04X}", "online": isinstance(st, tuple),
                  "level": st[0] if isinstance(st, tuple) else None,
                  "charging": st[1] if isinstance(st, tuple) else None} for pid, k, n, st in found]},
                 ensure_ascii=False), "diagnostics.json"

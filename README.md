@@ -2,7 +2,7 @@
 
 # razer-battery-tray
 
-Shows the battery level of wireless Razer headsets, mice and keyboards on the Windows taskbar, next to the clock. Razer Synapse is not needed.
+Shows the battery level of wireless Razer headsets, mice and keyboards on the Windows taskbar, next to the clock. Razer Synapse is not needed. It also shows Bluetooth devices of any brand, Logitech devices on a receiver and headsets that HeadsetControl knows ([other brands](#other-brands)).
 
 I wrote it because Synapse 4 doesn't know my Barracuda X 2.4 at all (its log says `supported type: unknown`), and Windows only reports battery for Bluetooth devices. The program asks the USB dongle directly.
 
@@ -82,6 +82,14 @@ The program reads each dongle's HID report descriptor and picks the protocol fro
 I only own the Barracuda X 2.4, so everything else is written from protocol notes by other people and may need fixes. Wired mice and keyboards are skipped on purpose, because they answer the battery request with garbage.
 
 If your device doesn't show up or shows nonsense, run `RazerBatteryIndicator.exe --once`. It saves to `%APPDATA%\RazerBatteryIndicator\diagnostics.txt` the program version, the Windows build and every Razer HID interface it sees, with its `VID:PID`, including the ones it skipped. Then [report the device](../../issues/new?template=device.yml) with that file.
+
+### Other brands
+
+The widget also shows devices from other makers, next to the Razer ones:
+
+- **Bluetooth devices of any brand** (headphones, mice, keyboards) whose level Windows already knows, the same number Settings > Bluetooth & devices shows. Nothing is sent to the device.
+- **Logitech mice, keyboards and headsets on a Unifying, Lightspeed or Bolt receiver**, read over HID++ 2.0 as described by [Solaar](https://github.com/pwr-Solaar/Solaar). I have no Logitech device, so this was tested against a simulated receiver only.
+- **SteelSeries, Corsair, HyperX, Logitech and other headsets supported by [HeadsetControl](https://github.com/Sapd/HeadsetControl)**, if you install HeadsetControl yourself so that `headsetcontrol` runs from the command line. The program only calls it and does not ship it.
 
 ## Questions
 
