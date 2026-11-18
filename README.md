@@ -89,7 +89,7 @@ The widget also shows devices from other makers, next to the Razer ones:
 
 - **Bluetooth devices of any brand** (headphones, mice, keyboards) whose level Windows already knows, the same number Settings > Bluetooth & devices shows. Nothing is sent to the device.
 - **Logitech mice, keyboards and headsets on a Unifying, Lightspeed or Bolt receiver**, read over HID++ 2.0 as described by [Solaar](https://github.com/pwr-Solaar/Solaar). I have no Logitech device, so this was tested against a simulated receiver only.
-- **PlayStation 4 DualShock 4 controllers** over Bluetooth or USB, from the status the controller already streams; several at once get the end of their Bluetooth address in the name. Over Bluetooth the level is only there once something (Steam, a game, Windows) has switched the controller to its full reports; until then it is not shown.
+- **PlayStation 4 DualShock 4 controllers** over Bluetooth or USB, from the status the controller already streams; each gets the end of its Bluetooth address in the name. Over Bluetooth the level is only there once something (Steam, a game, Windows) has switched the controller to its full reports; until then it is not shown.
 - **SteelSeries, Corsair, HyperX, Logitech and other headsets supported by [HeadsetControl](https://github.com/Sapd/HeadsetControl)**, if you install HeadsetControl yourself so that `headsetcontrol` runs from the command line. The program only calls it and does not ship it.
 
 ## Questions

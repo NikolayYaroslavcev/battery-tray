@@ -4,8 +4,11 @@ Download `RazerBatteryIndicator.exe` and double-click it. It installs itself: sh
 
 Windows SmartScreen will warn because the file isn't signed with a paid certificate: "More info", then "Run anyway". / SmartScreen предупредит, что файл без платной подписи: «Подробнее», затем «Выполнить в любом случае».
 
-What's new in 1.4.1:
-- PlayStation 4 DualShock 4 controllers, over Bluetooth or USB, with their own gamepad icon. Several controllers at once are told apart by the end of their Bluetooth address. Over Bluetooth the level appears once Steam, a game or Windows has switched the controller to its full reports.
+What's new in 1.4.2:
+- DualShock 4: connecting, removing or swapping a controller now shows up within seconds instead of at the next 20-minute poll, so a swapped controller no longer shows the old one's level.
+- Each controller has the end of its Bluetooth address in its name and keeps its own discharge history; a new controller no longer inherits the previous one's time estimate.
+
+1.4.1 added DualShock 4 controllers over Bluetooth or USB. Over Bluetooth the level appears once Steam, a game or Windows has switched the controller to its full reports.
 
 1.4.0 added Bluetooth devices of any brand, Logitech receivers and HeadsetControl headsets; those were tested without real devices, so please report anything that looks wrong.
 
