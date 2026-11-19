@@ -714,12 +714,18 @@ def put_on_top(hwnd, g=None):
     flags = 0x10 if g else 0x1 | 0x2 | 0x10                          # SWP_NOACTIVATE [| NOSIZE | NOMOVE]
     u32.SetWindowPos(hwnd, wt.HWND(-1), *(g or (0, 0, 0, 0)), flags)
 
+SHELL_FOCUS = ("Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Windows.UI.Core.CoreWindow",
+               "TopLevelWindowForOverflowXamlIsland", "XamlExplorerHostIslandWindow", "NotifyIconOverflowWindow")
+
 def own_by_taskbar(hwnd):
     # While Start, a tray flyout or the taskbar itself has focus, Windows 11 lifts the taskbar above every
-    # topmost window. Windows it owns ride along. Re-checked each tick: explorer may have restarted.
-    tb = u32.FindWindowW("Shell_TrayWnd", None)
-    if tb and u32.GetWindow(hwnd, 4) != tb:                          # GW_OWNER
-        u32.SetWindowLongPtrW(hwnd, -8, tb)                          # GWLP_HWNDPARENT
+    # topmost window. Windows it owns ride along. Only then, though: while the taskbar owns a visible window,
+    # explorer holds back toasts as if a flyout were open. Re-checked each tick: explorer may have restarted.
+    buf = ctypes.create_unicode_buffer(64)
+    u32.GetClassNameW(u32.GetForegroundWindow(), buf, 64)
+    tb = u32.FindWindowW("Shell_TrayWnd", None) if buf.value in SHELL_FOCUS else None
+    if u32.GetWindow(hwnd, 4) != (tb or None):                       # GW_OWNER
+        u32.SetWindowLongPtrW(hwnd, -8, tb or 0)                     # GWLP_HWNDPARENT
 
 
 # --- UI ---
