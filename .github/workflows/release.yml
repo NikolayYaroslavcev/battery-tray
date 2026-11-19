@@ -25,7 +25,6 @@ jobs:
           if ("v$v" -ne "${{ github.ref_name }}") { throw "VERSION $v in razer_battery.py does not match tag ${{ github.ref_name }}" }
 
       - run: pip install -r requirements-build.txt
-      - run: python make_icon.py
       - run: pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py
 
       - name: Zip, hash, write release notes

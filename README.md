@@ -116,7 +116,7 @@ python -m venv .venv
 
 `python razer_battery.py --once` prints what it finds and exits, add `--json` for JSON. `--quit` closes a running copy, `--portable` runs the exe without installing it.
 
-To build the exe: `pip install -r requirements-build.txt`, `python make_icon.py`, then `pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py`.
+To build the exe: `pip install -r requirements-build.txt`, then `pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py`.
 
 Releases are built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit, and each one links to its build log, so you can see the exe came from this source. Each release lists the SHA-256 of the exe. To check your download: `certutil -hashfile RazerBatteryIndicator.exe SHA256`.
 
