@@ -1,4 +1,7 @@
-"""Battery level of wireless Razer headsets, mice and keyboards on the Windows taskbar, plus Bluetooth, Logitech, DualShock 4 and HeadsetControl devices.
+"""Battery Tray: battery level of wireless headsets, mice, keyboards and controllers on the Windows taskbar. Razer
+devices are asked directly, plus Bluetooth, Logitech, DualShock 4 and HeadsetControl devices.
+
+Razer:
 
 Protocol by what the HID report descriptor offers:
   output report 2    PA frames (Barracuda X 0550, BlackShark V2 Pro 2023)
@@ -7,7 +10,7 @@ Protocol by what the HID report descriptor offers:
   feature, no id     classic 90-byte report, class 07 (mice, keyboards, BlackShark V2 Pro 2020)
 """
 import ctypes, ctypes.wintypes as wt, hashlib, json, os, re, shutil, subprocess, sys, threading, time, winreg
-import tkinter as tk, tkinter.font as tkfont, urllib.request
+import tkinter as tk, tkinter.font as tkfont, urllib.error, urllib.request
 from pathlib import Path
 
 import hid
@@ -31,9 +34,11 @@ WIRELESS_WORDS = ("hyperspeed", "wireless", "receiver", "dongle", "dock", " pro"
 POLL_ON_BATTERY, POLL_CHARGING, POLL_OFFLINE, HOVER_REFRESH = 20 * 60, 5 * 60, 60, 60
 SLEEP_GAP = 2 * POLL_ON_BATTERY + 60     # longer silence than this means the PC slept, not that we waited
 LOW_LEVELS = (20, 10)
-APP = "RazerBatteryIndicator"
+APP = "BatteryTray"
 VERSION = "1.5.0"
-REPO = "NikolayYaroslavcev/razer-battery-tray"
+REPO = "NikolayYaroslavcev/battery-tray"
+# Up to 1.5 the program was Razer Battery Tray: an installed copy of that moves itself over (install)
+OLD_APP, OLD_TITLE, OLD_REPO = "RazerBatteryIndicator", "Razer Battery Tray", "NikolayYaroslavcev/razer-battery-tray"
 CFG = Path(os.environ["APPDATA"]) / APP / "config.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RU = ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF in (0x19, 0x23)   # Windows in Russian, Belarusian
@@ -487,20 +492,28 @@ def save_cfg(cfg):
 # --- updates ---
 
 def _get(url, timeout, limit):
-    req = urllib.request.Request(url, headers={"User-Agent": "razer-battery-tray", "Accept": "application/vnd.github+json"})
+    req = urllib.request.Request(url, headers={"User-Agent": "battery-tray", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read(limit)
 
 def latest_release():
     """(version, exe_url, sha256) of the newest release, or None if it doesn't look right."""
-    rel = json.loads(_get(f"https://api.github.com/repos/{REPO}/releases/latest", 15, 1 << 20))
+    for repo in (REPO, OLD_REPO):             # the old name answers until the GitHub repository is renamed
+        try:
+            rel = json.loads(_get(f"https://api.github.com/repos/{repo}/releases/latest", 15, 1 << 20))
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+    else:
+        return None
     ver = str(rel.get("tag_name", "")).lstrip("v")
     asset = next((a for a in rel.get("assets", []) if a.get("name") == f"{APP}.exe"), None)
     sha = re.search(rf"\b([0-9A-Fa-f]{{64}})\s+{APP}\.exe", rel.get("body") or "")
     if not (asset and sha and re.fullmatch(r"\d+(\.\d+){0,3}", ver)):
         return None
     url = str(asset.get("browser_download_url", ""))
-    if not url.startswith(f"https://github.com/{REPO}/releases/download/"):
+    if not any(url.startswith(f"https://github.com/{r}/releases/download/") for r in (REPO, OLD_REPO)):
         return None
     return ver, url, sha.group(1).lower()
 
@@ -550,9 +563,11 @@ def set_autostart(on, cmd=None):
 
 # --- install / uninstall: the downloaded exe installs itself on first run ---
 
-TITLE = "Razer Battery Tray"
+TITLE = "Battery Tray"
 INSTALL_DIR = Path(os.environ["LOCALAPPDATA"]) / "Programs" / TITLE
-UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\RazerBatteryTray"
+OLD_INSTALL_DIR = INSTALL_DIR.with_name(OLD_TITLE)
+UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\BatteryTray"
+OLD_UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\RazerBatteryTray"
 NO_WINDOW, DETACHED = 0x08000000, 0x00000008
 
 k32 = ctypes.windll.kernel32
@@ -562,26 +577,27 @@ k32.CreateEventW.argtypes = [ctypes.c_void_p, wt.BOOL, wt.BOOL, wt.LPCWSTR]
 k32.SetEvent.argtypes = k32.ResetEvent.argtypes = k32.CloseHandle.argtypes = [wt.HANDLE]
 k32.WaitForSingleObject.argtypes = [wt.HANDLE, wt.DWORD]
 
-def named_event(name):
+def named_event(name, app=APP):
     """Manual-reset event shared by all copies: 'quit' closes the running one, 'show' pops its card."""
-    return k32.CreateEventW(None, True, False, f"Local\\{APP}.{name}")
+    return k32.CreateEventW(None, True, False, f"Local\\{app}.{name}")
 
-def already_running():
-    h = k32.CreateMutexW(None, False, f"Local\\{APP}")
+def already_running(app=APP):
+    h = k32.CreateMutexW(None, False, f"Local\\{app}")
     busy = k32.GetLastError() == 183                  # ERROR_ALREADY_EXISTS
     k32.CloseHandle(h)
     return busy
 
-def stop_running():
-    ev = named_event("quit")
+def stop_running(app=APP):
+    ev = named_event("quit", app)
     k32.SetEvent(ev)
     for _ in range(40):
-        if not already_running():
+        if not already_running(app):
             break
         time.sleep(0.1)
     else:                                             # 1.0.0 doesn't listen for the event
-        subprocess.run(["taskkill", "/F", "/IM", f"{APP}.exe", "/FI", f"PID ne {os.getpid()}"],
-                       capture_output=True, creationflags=NO_WINDOW)
+        # not us or our pyinstaller loader: right after an update from 1.x we still carry the old exe name
+        subprocess.run(["taskkill", "/F", "/IM", f"{app}.exe", "/FI", f"PID ne {os.getpid()}",
+                        "/FI", f"PID ne {os.getppid()}"], capture_output=True, creationflags=NO_WINDOW)
         time.sleep(1)
     k32.ResetEvent(ev)
     k32.CloseHandle(ev)
@@ -593,8 +609,9 @@ def _ps(script):
 def _psq(value):
     return "'" + str(value).replace("'", "''") + "'"
 
-_LINKS = ("foreach ($d in [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs')) "
-          "{ $l = Join-Path $d " + _psq(TITLE + ".lnk") + "; ")
+def _links(title=TITLE):
+    return ("foreach ($d in [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs')) "
+            "{ $l = Join-Path $d " + _psq(title + ".lnk") + "; ")
 
 def register(exe):
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as k:
@@ -623,16 +640,86 @@ def remove_old_exe():
         except OSError:
             time.sleep(1)
 
+STARTUP_APPROVED = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"   # Task Manager's switch
+
+def move_old_config():
+    """The 1.x settings, unless ours exist (a --once run makes the folder, not the settings)."""
+    old = CFG.parent.with_name(OLD_APP)
+    if not old.is_dir() or CFG.exists():
+        return
+    try:
+        CFG.parent.mkdir(parents=True, exist_ok=True)
+        for f in old.iterdir():
+            if not (CFG.parent / f.name).exists():
+                f.rename(CFG.parent / f.name)
+        shutil.rmtree(old, ignore_errors=True)
+    except OSError:
+        pass
+
+def old_autostart():
+    """None if Razer Battery Tray (1.x) isn't installed, else whether it starts with Windows."""
+    try:
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, OLD_UNINSTALL_KEY).Close()
+    except OSError:
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            winreg.QueryValueEx(k, OLD_APP)
+    except OSError:
+        return False
+    try:                                              # switched off in Task Manager: odd first byte
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_APPROVED) as k:
+            return not winreg.QueryValueEx(k, OLD_APP)[0][0] & 1
+    except (OSError, IndexError, TypeError):
+        return True
+
+def remove_old_entries():
+    """The 1.x autostart, shortcuts and Settings entry. Only once ours are in place: a failed install keeps 1.x."""
+    for key in (RUN_KEY, STARTUP_APPROVED):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as k:
+                winreg.DeleteValue(k, OLD_APP)
+        except OSError:
+            pass
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, OLD_UNINSTALL_KEY)
+    except OSError:
+        pass
+    _ps(_links(OLD_TITLE) + "Remove-Item -LiteralPath $l -ErrorAction SilentlyContinue }")
+
+def remove_old_install():
+    """The 1.x folder; the exe that migrated us may still be closing, so keep trying for a minute."""
+    for _ in range(60):
+        if not OLD_INSTALL_DIR.is_dir() or any(not f.name.lower().startswith(OLD_APP.lower())
+                                               for f in OLD_INSTALL_DIR.iterdir()):
+            return                                    # gone, or holds files that aren't ours
+        try:
+            shutil.rmtree(OLD_INSTALL_DIR)
+            return
+        except OSError:
+            time.sleep(1)
+
 def install():
     dst = INSTALL_DIR / f"{APP}.exe"
     stop_running()
+    stop_running(OLD_APP)                             # Razer Battery Tray 1.x, installed or portable
+    autostart = old_autostart()
+    move_old_config()
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(sys.executable, dst)
-    _ps(_LINKS + f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut($l); $s.TargetPath = {_psq(dst)}; "
-                 f"$s.WorkingDirectory = {_psq(INSTALL_DIR)}; $s.Description = {_psq(TITLE)}; $s.Save() }}")
+    for i in range(20):                               # the closed copy's pyinstaller loader holds its exe a bit longer
+        try:
+            shutil.copy2(sys.executable, dst)
+            break
+        except PermissionError:
+            if i == 19:
+                raise
+            time.sleep(0.5)
+    _ps(_links() + f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut($l); $s.TargetPath = {_psq(dst)}; "
+                   f"$s.WorkingDirectory = {_psq(INSTALL_DIR)}; $s.Description = {_psq(TITLE)}; $s.Save() }}")
     register(dst)
-    set_autostart(True, f'"{dst}"')
-    launch(dst, "--installed")
+    set_autostart(autostart is not False, f'"{dst}"')
+    remove_old_entries()                              # its folder goes once our installed copy runs
+    launch(dst, "--installed" if autostart is None else "--renamed")
 
 def uninstall():
     u = ctypes.windll.user32
@@ -642,7 +729,7 @@ def uninstall():
         return
     stop_running()
     set_autostart(False)
-    _ps(_LINKS + "Remove-Item -LiteralPath $l -ErrorAction SilentlyContinue }")
+    _ps(_links() + "Remove-Item -LiteralPath $l -ErrorAction SilentlyContinue }")
     try:
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY)
     except OSError:
@@ -882,6 +969,8 @@ class App:
         if "--installed" in sys.argv:
             self.show_alert(None, L("Установлено. Заряд здесь, у часов, ярлык на рабочем столе",
                                     "Installed. Battery levels are here, by the clock; shortcut on the desktop"), GREEN, 12)
+        if "--renamed" in sys.argv:
+            self.show_alert(None, L(f"{OLD_TITLE} теперь называется {TITLE}", f"{OLD_TITLE} is now {TITLE}"), GREEN, 12)
 
         threading.Thread(target=self.poll_loop, daemon=True).start()
         threading.Thread(target=self.pad_watch, daemon=True).start()
@@ -1227,8 +1316,8 @@ class App:
         """The widget is a canvas, so screen readers and UI Automation only see the window title."""
         name = "; ".join(f"{d.name} {text}" + ("" if isinstance(st, tuple) else L(", не в сети", ", offline"))
                          + (L(", заряжается", ", charging") if isinstance(st, tuple) and st[1] else "")
-                         for d, (_, text, st) in zip(self.shown(), self.items())) or L("Razer: нет устройств",
-                                                                                       "Razer: no devices")
+                         for d, (_, text, st) in zip(self.shown(), self.items())) or L(f"{TITLE}: нет устройств",
+                                                                                       f"{TITLE}: no devices")
         if name != self.name:
             self.name = name
             for hwnd in (self.hwnd, self.hit_hwnd):
@@ -1463,7 +1552,8 @@ def main():
     elif getattr(sys, "frozen", False) and Path(sys.executable).parent != INSTALL_DIR and "--portable" not in sys.argv:
         install()
     else:
-        waiting = "--after-update" in sys.argv or "--installed" in sys.argv   # the old copy may still be closing
+        # the old copy may still be closing
+        waiting = any(a in sys.argv for a in ("--after-update", "--installed", "--renamed"))
         for _ in range(40 if waiting else 1):
             mutex = k32.CreateMutexW(None, False, f"Local\\{APP}")
             if k32.GetLastError() != 183:                             # ERROR_ALREADY_EXISTS
@@ -1473,6 +1563,11 @@ def main():
         else:
             k32.SetEvent(named_event("show"))                         # already running: let it show itself
             return
+        installed = getattr(sys, "frozen", False) and Path(sys.executable).parent == INSTALL_DIR
+        if installed or old_autostart() is None:      # never take the settings of a 1.x copy still installed
+            move_old_config()
+        if installed:
+            threading.Thread(target=remove_old_install, daemon=True).start()
         if getattr(sys, "frozen", False):
             threading.Thread(target=remove_old_exe, daemon=True).start()
             try:

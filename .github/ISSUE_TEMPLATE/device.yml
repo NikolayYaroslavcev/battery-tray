@@ -19,7 +19,7 @@ body:
     id: diagnostics
     attributes:
       label: diagnostics.txt
-      description: Run `RazerBatteryIndicator.exe --once`, then paste the contents of %APPDATA%\RazerBatteryIndicator\diagnostics.txt
+      description: Run `BatteryTray.exe --once`, then paste the contents of %APPDATA%\BatteryTray\diagnostics.txt
       render: text
     validations:
       required: true

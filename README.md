@@ -1,12 +1,14 @@
 <img src="icon.png" width="96" align="right" alt="">
 
-# razer-battery-tray
+# Battery Tray
 
-Shows the battery level of wireless Razer headsets, mice and keyboards on the Windows taskbar, next to the clock. Razer Synapse is not needed. It also shows Bluetooth devices of any brand, Logitech devices on a receiver, DualShock 4 controllers and headsets that HeadsetControl knows ([other brands](#other-brands)).
+Shows the battery level of wireless headsets, mice, keyboards and controllers on the Windows taskbar, next to the clock: Razer devices without Razer Synapse, Bluetooth devices of any brand, Logitech devices on a receiver, DualShock 4 controllers and headsets that HeadsetControl knows ([other brands](#other-brands)).
+
+Up to version 1.5 it was called Razer Battery Tray. An installed copy moves itself to the new name when it updates, settings and autostart included.
 
 I wrote it because Synapse 4 doesn't know my Barracuda X 2.4 at all (its log says `supported type: unknown`), and Windows only reports battery for Bluetooth devices. The program asks the USB dongle directly.
 
-**[Download RazerBatteryIndicator.exe](../../releases/latest)** (Windows 10/11)
+**[Download BatteryTray.exe](../../releases/latest)** (Windows 10/11)
 
 On the taskbar, next to the tray:
 
@@ -18,7 +20,7 @@ Hovering over it opens a card:
 
 ## Установка
 
-1. Откройте страницу [последней версии](../../releases/latest) и скачайте файл `RazerBatteryIndicator.exe`. Если браузер не даёт скачать exe, возьмите `RazerBatteryIndicator.zip` и распакуйте его.
+1. Откройте страницу [последней версии](../../releases/latest) и скачайте файл `BatteryTray.exe`. Если браузер не даёт скачать exe, возьмите `BatteryTray.zip` и распакуйте его.
 2. Запустите его двойным щелчком. Windows, скорее всего, покажет синее окно. Это нормально, ниже объяснено почему. Нажмите «Подробнее»:
 
    <img src="docs/smartscreen-1.png" width="360" alt="Окно SmartScreen: ссылка «Подробнее»">
@@ -40,9 +42,9 @@ Windows показывает это окно для любой программ�
 - Браузер может написать, что файл «обычно не скачивают» или что он «может быть опасен». Выберите «Сохранить» или «Всё равно сохранить». Если exe не скачивается совсем, возьмите zip.
 - Некоторые антивирусы ошибочно помечают программы, собранные PyInstaller, как подозрительные. Это известная ложная тревога.
 
-Как убедиться, что файл настоящий: весь код открыт и лежит в этом репозитории (один файл `razer_battery.py`). У каждого релиза указана контрольная сумма SHA-256; проверить свой файл можно командой `certutil -hashfile RazerBatteryIndicator.exe SHA256` и сравнить с релизом. Программа не трогает ничего, кроме своей папки, ярлыков и автозапуска, и в интернет ходит только к GitHub за обновлениями.
+Как убедиться, что файл настоящий: весь код открыт и лежит в этом репозитории (один файл `battery_tray.py`). У каждого релиза указана контрольная сумма SHA-256; проверить свой файл можно командой `certutil -hashfile BatteryTray.exe SHA256` и сравнить с релизом. Программа не трогает ничего, кроме своей папки, ярлыков и автозапуска, и в интернет ходит только к GitHub за обновлениями.
 
-Удалить программу можно как любую другую: «Параметры» → «Приложения» → «Установленные приложения» → Razer Battery Tray → «Удалить». Вместе с ней удаляются ярлыки, автозапуск и настройки.
+Удалить программу можно как любую другую: «Параметры» → «Приложения» → «Установленные приложения» → Battery Tray → «Удалить». Вместе с ней удаляются ярлыки, автозапуск и настройки.
 
 ## What you get
 
@@ -60,13 +62,13 @@ It uses about 20 MB of RAM and close to zero CPU. Every battery query wakes the 
 
 ## Install
 
-1. Download `RazerBatteryIndicator.exe` from the [latest release](../../releases/latest). If your browser blocks exe downloads, take `RazerBatteryIndicator.zip` and unpack it.
-2. Double-click it. Windows SmartScreen will most likely say "Windows protected your PC": click "More info", then "Run anyway" (screenshots in the Russian section above). This happens because the exe isn't signed with a paid code-signing certificate (around $300 a year, which I'm not paying for a free tool), not because anything is wrong with it. "Unknown publisher" means Windows doesn't know who made the file, not that it found anything bad in it. Browsers may also warn that the file "isn't commonly downloaded", and some antivirus programs flag PyInstaller builds by mistake. To check the file, compare `certutil -hashfile RazerBatteryIndicator.exe SHA256` with the hash in the release notes, or run it from source (below); it's one Python file.
-3. That's it. The exe installs itself into `%LOCALAPPDATA%\Programs\Razer Battery Tray`, adds shortcuts to the desktop and the Start menu, starts with Windows from now on and shows the battery level next to the clock. You can delete the downloaded file afterwards. To skip autostart, right click the percentage and untick "Start with Windows".
+1. Download `BatteryTray.exe` from the [latest release](../../releases/latest). If your browser blocks exe downloads, take `BatteryTray.zip` and unpack it.
+2. Double-click it. Windows SmartScreen will most likely say "Windows protected your PC": click "More info", then "Run anyway" (screenshots in the Russian section above). This happens because the exe isn't signed with a paid code-signing certificate (around $300 a year, which I'm not paying for a free tool), not because anything is wrong with it. "Unknown publisher" means Windows doesn't know who made the file, not that it found anything bad in it. Browsers may also warn that the file "isn't commonly downloaded", and some antivirus programs flag PyInstaller builds by mistake. To check the file, compare `certutil -hashfile BatteryTray.exe SHA256` with the hash in the release notes, or run it from source (below); it's one Python file.
+3. That's it. The exe installs itself into `%LOCALAPPDATA%\Programs\Battery Tray`, adds shortcuts to the desktop and the Start menu, starts with Windows from now on and shows the battery level next to the clock. You can delete the downloaded file afterwards. To skip autostart, right click the percentage and untick "Start with Windows".
 
 Windows 10 or 11, no admin rights required. The interface is in English, or in Russian when Windows is in Russian or Belarusian. Running a newer downloaded exe the same way updates the installed copy. Start it with `--portable` if you'd rather run it from where it is without installing.
 
-To remove it, use Settings, Apps, Installed apps, Razer Battery Tray, Uninstall. That removes the program, its shortcuts, autostart and settings.
+To remove it, use Settings, Apps, Installed apps, Battery Tray, Uninstall. That removes the program, its shortcuts, autostart and settings.
 
 ## Supported devices
 
@@ -81,7 +83,7 @@ The program reads each dongle's HID report descriptor and picks the protocol fro
 
 I only own the Barracuda X 2.4, so everything else is written from protocol notes by other people and may need fixes. Wired mice and keyboards are skipped on purpose, because they answer the battery request with garbage.
 
-If your device doesn't show up or shows nonsense, run `RazerBatteryIndicator.exe --once`. It saves to `%APPDATA%\RazerBatteryIndicator\diagnostics.txt` the program version, the Windows build and every Razer HID interface it sees, with its `VID:PID`, including the ones it skipped. Then [report the device](../../issues/new?template=device.yml) with that file.
+If your device doesn't show up or shows nonsense, run `BatteryTray.exe --once`. It saves to `%APPDATA%\BatteryTray\diagnostics.txt` the program version, the Windows build and every Razer HID interface it sees, with its `VID:PID`, including the ones it skipped. Then [report the device](../../issues/new?template=device.yml) with that file.
 
 ### Other brands
 
@@ -100,7 +102,7 @@ The widget also shows devices from other makers, next to the Razer ones:
 
 **Does it update itself?** Once a day it asks GitHub whether a newer release exists. If one does, the card says so and the right-click menu gets an "Update to …" item. Clicking it downloads the new exe, checks it against the SHA-256 in the release notes and replaces the old file in place, so autostart keeps working. Nothing is installed without that click. The request goes to `api.github.com` and carries no information about you or your devices. You can turn it off with "Check for updates" in the menu. Version 1.0.0 has no updater, so from 1.0.0 you need to download the new version by hand once.
 
-**Can a script or Rainmeter read the level?** `RazerBatteryIndicator.exe --once --json` writes the levels to `%APPDATA%\RazerBatteryIndicator\diagnostics.json`, for example `{"version": "1.3.0", "devices": [{"name": "Razer Barracuda X", "kind": "headset", "pid": "0550", "online": true, "level": 87, "charging": false}]}`. The widget's window title also holds the level, so screen readers and UI Automation tools can read it.
+**Can a script or Rainmeter read the level?** `BatteryTray.exe --once --json` writes the levels to `%APPDATA%\BatteryTray\diagnostics.json`, for example `{"version": "1.3.0", "devices": [{"name": "Razer Barracuda X", "kind": "headset", "pid": "0550", "online": true, "level": 87, "charging": false}]}`. The widget's window title also holds the level, so screen readers and UI Automation tools can read it.
 
 **Can it run next to Synapse?** Synapse 4 ignores the Barracuda X 2.4, so with that headset there's nothing to clash with. I haven't tried it alongside Synapse on devices Synapse does support.
 
@@ -111,14 +113,14 @@ Python 3.10 or newer:
 ```
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\pythonw razer_battery.py
+.venv\Scripts\pythonw battery_tray.py
 ```
 
-`python razer_battery.py --once` prints what it finds and exits, add `--json` for JSON. `--quit` closes a running copy, `--portable` runs the exe without installing it.
+`python battery_tray.py --once` prints what it finds and exits, add `--json` for JSON. `--quit` closes a running copy, `--portable` runs the exe without installing it.
 
-To build the exe: `pip install -r requirements-build.txt`, then `pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py`.
+To build the exe: `pip install -r requirements-build.txt`, then `pyinstaller --onefile --noconsole --icon icon.ico --name BatteryTray battery_tray.py`.
 
-Releases are built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit, and each one links to its build log, so you can see the exe came from this source. Each release lists the SHA-256 of the exe. To check your download: `certutil -hashfile RazerBatteryIndicator.exe SHA256`.
+Releases are built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit, and each one links to its build log, so you can see the exe came from this source. Each release lists the SHA-256 of the exe. To check your download: `certutil -hashfile BatteryTray.exe SHA256`.
 
 ## How it works
 
@@ -126,7 +128,7 @@ The program goes through every Razer HID collection (vendor id `1532`) whose nam
 
 The protocol details and the list of wireless mice come from [OpenRazer](https://github.com/openrazer/openrazer), [HaloBattery](https://github.com/Waturus/HaloBattery) and [Barracuda_X_Helpers](https://github.com/GigaVibeSlopper67/Barracuda_X_Helpers). Thanks to their authors.
 
-Settings and the learned drain rate are stored in `%APPDATA%\RazerBatteryIndicator\config.json`.
+Settings and the learned drain rate are stored in `%APPDATA%\BatteryTray\config.json`.
 
 Not affiliated with Razer.
 

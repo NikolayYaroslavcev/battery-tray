@@ -21,17 +21,20 @@ jobs:
       - name: Check that VERSION matches the tag
         shell: pwsh
         run: |
-          $v = (Select-String -Path razer_battery.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
-          if ("v$v" -ne "${{ github.ref_name }}") { throw "VERSION $v in razer_battery.py does not match tag ${{ github.ref_name }}" }
+          $v = (Select-String -Path battery_tray.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "VERSION $v in battery_tray.py does not match tag ${{ github.ref_name }}" }
 
       - run: pip install -r requirements-build.txt
-      - run: pyinstaller --onefile --noconsole --icon icon.ico --name RazerBatteryIndicator razer_battery.py
+      - run: pyinstaller --onefile --noconsole --icon icon.ico --name BatteryTray battery_tray.py
 
+      # Razer Battery Tray 1.x updates itself only from an asset with its own name; the new exe moves it over.
+      # Needed until the repository is renamed, after that 1.x can't find releases anyway.
       - name: Zip, hash, write release notes
         shell: pwsh
         run: |
-          Compress-Archive dist/RazerBatteryIndicator.exe dist/RazerBatteryIndicator.zip
-          $hashes = Get-FileHash dist/RazerBatteryIndicator.exe, dist/RazerBatteryIndicator.zip |
+          Copy-Item dist/BatteryTray.exe dist/RazerBatteryIndicator.exe
+          Compress-Archive dist/BatteryTray.exe dist/BatteryTray.zip
+          $hashes = Get-FileHash dist/BatteryTray.exe, dist/BatteryTray.zip, dist/RazerBatteryIndicator.exe |
             ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" }
           $run = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           $fence = '```'
@@ -43,4 +46,4 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/RazerBatteryIndicator.exe dist/RazerBatteryIndicator.zip --title "${{ github.ref_name }}" --notes-file notes.md
+        run: gh release create "${{ github.ref_name }}" dist/BatteryTray.exe dist/BatteryTray.zip dist/RazerBatteryIndicator.exe --title "${{ github.ref_name }}" --notes-file notes.md
