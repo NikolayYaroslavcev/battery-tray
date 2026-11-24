@@ -36,6 +36,10 @@ VERSION = "1.4.3"
 REPO = "NikolayYaroslavcev/razer-battery-tray"
 CFG = Path(os.environ["APPDATA"]) / APP / "config.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RU = ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF in (0x19, 0x23)   # Windows in Russian, Belarusian
+
+def L(ru, en):
+    return ru if RU else en
 
 
 # --- protocols: take an open hid.device, return (percent, charging) or None ---
@@ -200,8 +204,29 @@ def _try(pid, d, kind, protos=None):
         h.close()
 
 
-def read_all():
-    """[(pid, kind, name, state)], state is 'offline' or (percent, charging)."""
+def read_all(radio=True):
+    """[(pid, kind, name, state)], state is 'offline' or (percent, charging). radio=False reads again only
+    what costs the devices nothing (PASSIVE) and repeats the last readings of the rest."""
+    if radio:
+        _radio[:] = read_razer()
+        if time.time() - _slow[0] > SLOW_EVERY:   # these talk to devices, so not on every hover or offline poll
+            _slow[:] = [time.time(), _optional(read_logitech) + _optional(read_headsetcontrol)]
+    razer = [r for _, _, n, _ in _radio if (r := n.lower().removeprefix("razer ")) not in ("", "device")]
+    bt = [e for e in _optional(read_bluetooth) if not any(r in e[2].lower() for r in razer)]  # same headset via BT
+    return _radio + bt + _optional(read_dualshock) + _slow[1]
+
+
+SLOW_EVERY, _slow, _radio = 5 * 60, [0.0, []], []
+PASSIVE = ("bt:", "ds4:")         # pid prefixes of sources that only read what Windows or the pad already has
+
+def _optional(source):
+    try:
+        return source()
+    except Exception:                 # optional sources must never cost the Razer readings
+        return []
+
+
+def read_razer():
     groups = {}
     for d in hid.enumerate(VID):
         if classify(d):
@@ -216,20 +241,7 @@ def read_all():
         else:
             state = next((r for r in (_try(pid, d, kind) for d in cands) if r), "offline")
         out.append((pid, kind, name, state))
-    if time.time() - _slow[0] > SLOW_EVERY:   # these talk to devices, so not on every hover or offline poll
-        _slow[:] = [time.time(), _optional(read_logitech) + _optional(read_headsetcontrol)]
-    razer = [r for _, _, n, _ in out if (r := n.lower().removeprefix("razer ")) not in ("", "device")]
-    bt = [e for e in _optional(read_bluetooth) if not any(r in e[2].lower() for r in razer)]  # same headset via BT
-    return out + bt + _optional(read_dualshock) + _slow[1]
-
-
-SLOW_EVERY, _slow = 5 * 60, [0.0, []]
-
-def _optional(source):
-    try:
-        return source()
-    except Exception:                 # optional sources must never cost the Razer readings
-        return []
+    return out
 
 
 # --- other brands; their pids are strings so they never mix with Razer product ids ---
@@ -463,7 +475,12 @@ def load_cfg():
 def save_cfg(cfg):
     try:
         CFG.parent.mkdir(parents=True, exist_ok=True)
-        CFG.write_text(json.dumps(cfg), "utf-8")
+        tmp = CFG.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps(cfg))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, CFG)          # a crash or power cut mid-write must not reset the settings and autostart
     except OSError:
         pass
 
@@ -494,13 +511,17 @@ def download_update(url, sha):
     """Download, check the hash from the release notes, swap the exe in place. Returns the exe path."""
     data = _get(url, 120, 64 << 20)
     if hashlib.sha256(data).hexdigest() != sha:
-        raise ValueError("контрольная сумма не совпала")
+        raise ValueError(L("контрольная сумма не совпала", "checksum mismatch"))
     exe = Path(sys.executable)
     new, old = exe.with_name(f"{exe.stem}.new.exe"), exe.with_name(f"{exe.stem}.old.exe")
     new.write_bytes(data)
     old.unlink(missing_ok=True)
     exe.rename(old)                   # a running exe can be renamed, just not overwritten
-    new.rename(exe)
+    try:
+        new.rename(exe)
+    except OSError:                   # e.g. an antivirus still scanning it: put ours back, or autostart breaks
+        old.rename(exe)
+        raise
     return exe
 
 
@@ -616,7 +637,8 @@ def install():
 def uninstall():
     u = ctypes.windll.user32
     quiet = "--silent" in sys.argv                   # winget uninstall
-    if not quiet and u.MessageBoxW(None, f"Удалить {TITLE} вместе с настройками?", TITLE, 0x4 | 0x20 | 0x40000) != 6:   # IDYES
+    ask = L(f"Удалить {TITLE} вместе с настройками?", f"Remove {TITLE} and its settings?")
+    if not quiet and u.MessageBoxW(None, ask, TITLE, 0x4 | 0x20 | 0x40000) != 6:   # IDYES
         return
     stop_running()
     set_autostart(False)
@@ -630,7 +652,7 @@ def uninstall():
         subprocess.Popen(f'cmd /c ping -n 3 127.0.0.1 >nul & rmdir /s /q "{INSTALL_DIR}"',
                          creationflags=NO_WINDOW | DETACHED, close_fds=True)
     if not quiet:
-        u.MessageBoxW(None, f"{TITLE} удалён.", TITLE, 0x40 | 0x40000)
+        u.MessageBoxW(None, L(f"{TITLE} удалён.", f"{TITLE} has been removed."), TITLE, 0x40 | 0x40000)
 
 
 # --- win32 ---
@@ -714,6 +736,15 @@ def put_on_top(hwnd, g=None):
     flags = 0x10 if g else 0x1 | 0x2 | 0x10                          # SWP_NOACTIVATE [| NOSIZE | NOMOVE]
     u32.SetWindowPos(hwnd, wt.HWND(-1), *(g or (0, 0, 0, 0)), flags)
 
+def under_taskbar(hwnd):
+    """The taskbar comes above every topmost window when clicked; only then do we need to climb back."""
+    tb, w = u32.FindWindowW("Shell_TrayWnd", None), hwnd
+    for _ in range(500):
+        w = u32.GetWindow(w, 3)                                      # GW_HWNDPREV: the window just above
+        if not w or w == tb:
+            return bool(w)
+    return True
+
 SHELL_FOCUS = ("Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Windows.UI.Core.CoreWindow",
                "TopLevelWindowForOverflowXamlIsland", "XamlExplorerHostIslandWindow", "NotifyIconOverflowWindow")
 
@@ -726,6 +757,7 @@ def own_by_taskbar(hwnd):
     tb = u32.FindWindowW("Shell_TrayWnd", None) if buf.value in SHELL_FOCUS else None
     if u32.GetWindow(hwnd, 4) != (tb or None):                       # GW_OWNER
         u32.SetWindowLongPtrW(hwnd, -8, tb or 0)                     # GWLP_HWNDPARENT
+        return True
 
 
 # --- UI ---
@@ -733,12 +765,14 @@ def own_by_taskbar(hwnd):
 GREEN, GREEN_DIM, AMBER, RED, GREY = "#30d158", "#1f7a37", "#ffd60a", "#ff453a", "#8e8e93"
 BOLT = "\ue945"
 ICONS = {"headset": "\ue7f6", "mouse": "\ue962", "keyboard": "\ue765", "gamepad": "\ue7fc"}   # dict order = display order
-OFFLINE_TEXT = {"headset": "Наушники выключены или вне зоны", "mouse": "Мышь выключена или спит",
-                "keyboard": "Клавиатура выключена или спит", "gamepad": "Геймпад выключен"}
+OFFLINE_TEXT = {"headset": ("Наушники выключены или вне зоны", "Headset is off or out of range"),
+                "mouse": ("Мышь выключена или спит", "Mouse is off or asleep"),
+                "keyboard": ("Клавиатура выключена или спит", "Keyboard is off or asleep"),
+                "gamepad": ("Геймпад выключен", "Controller is off")}
 
 
 def fmt_hours(h):
-    return f"~{h:.0f} ч" if h >= 1.5 else f"~{max(1, round(h * 60)):.0f} мин"
+    return f"~{h:.0f} {L('ч', 'h')}" if h >= 1.5 else f"~{max(1, round(h * 60)):.0f} {L('мин', 'min')}"
 
 def level_color(st, fg):
     if not isinstance(st, tuple):
@@ -772,7 +806,8 @@ class App:
                       "f_small": (text, 11)}
         for attr, (family, size) in self.fonts.items():
             setattr(self, attr, tkfont.Font(family=family, size=-self.px(size)))
-        self.card_theme = self.menu_theme = None
+        self.card_theme = self.menu_theme = self.drawn = None
+        self.raised = {}                                    # hwnd -> geometry it was last raised with
         self.notch_now = False
 
         r.overrideredirect(True)
@@ -796,7 +831,7 @@ class App:
         self.hwnd, self.card_hwnd, self.hit_hwnd = make_overlay(r), make_overlay(self.card), make_overlay(self.hit)
         self.pm_hwnd = make_overlay(self.pm)
 
-        self.devices = {}                                   # pid -> Device
+        self.devices, self.known = {}, {}                   # pid -> Device: listed now / ever seen
         self.answered = set()                               # pids that ever returned a level
         self.menu_token = 0
         self.result, self.handled, self.updated = None, None, None
@@ -810,19 +845,22 @@ class App:
         self.autostart = autostart_enabled()
         # (icon, label, action, checked); None is a separator
         self.base_menu = [
-            ("\ue72c", "Обновить", self.wake.set, None),
+            ("\ue72c", L("Обновить", "Refresh"), self.wake.set, None),
             None,
-            (None, "На панели задач", lambda: self.set_mode("taskbar"), lambda: self.mode.get() == "taskbar"),
-            (None, "Чёлка сверху", lambda: self.set_mode("notch"), lambda: self.mode.get() == "notch"),
+            (None, L("На панели задач", "On the taskbar"), lambda: self.set_mode("taskbar"),
+             lambda: self.mode.get() == "taskbar"),
+            (None, L("Чёлка сверху", "Notch at the top"), lambda: self.set_mode("notch"),
+             lambda: self.mode.get() == "notch"),
             None,
-            (None, "Запускать с Windows", self.toggle_autostart, lambda: self.autostart),
-            (None, "Проверять обновления", self.toggle_updates, lambda: self.cfg.get("check_updates", True)),
-            ("\ue7e8", "Выход", self.quit, None),
+            (None, L("Запускать с Windows", "Start with Windows"), self.toggle_autostart, lambda: self.autostart),
+            (None, L("Проверять обновления", "Check for updates"), self.toggle_updates,
+             lambda: self.cfg.get("check_updates", True)),
+            ("\ue7e8", L("Выход", "Exit"), self.quit, None),
         ]
         self.update = self.update_seen = self.update_done = None
         self.quit_ev, self.show_ev, self.quitting = named_event("quit"), named_event("show"), False
         self.interval, self.polled_at, self.ticked_at = POLL_OFFLINE, 0.0, time.time()
-        self.menu_rows, self.menu_hover, self.menu_geom, self.card_geom = [], -1, None, None
+        self.menu_rows, self.menu_hover, self.menu_geom, self.card_geom, self.menu_now = [], -1, None, None, []
         self.hit.bind("<Button-1>", lambda e: self.wake.set())
         self.hit.bind("<Button-3>", self.open_menu)
         self.cc.bind("<Button-1>", lambda e: self.wake.set())
@@ -839,9 +877,11 @@ class App:
                     self.toggle_autostart()
                 except OSError:
                     pass
-            self.show_alert(None, "Готово! Заряд теперь здесь, у часов. Правый клик — меню", GREEN, 12)
+            self.show_alert(None, L("Готово! Заряд теперь здесь, у часов. Правый клик — меню",
+                                    "Done! Battery levels are here, by the clock. Right click for the menu"), GREEN, 12)
         if "--installed" in sys.argv:
-            self.show_alert(None, "Установлено. Заряд здесь, у часов, ярлык на рабочем столе", GREEN, 12)
+            self.show_alert(None, L("Установлено. Заряд здесь, у часов, ярлык на рабочем столе",
+                                    "Installed. Battery levels are here, by the clock; shortcut on the desktop"), GREEN, 12)
 
         threading.Thread(target=self.poll_loop, daemon=True).start()
         threading.Thread(target=self.pad_watch, daemon=True).start()
@@ -850,9 +890,25 @@ class App:
 
     @property
     def menu_items(self):
-        if not self.update:
-            return self.base_menu
-        return [("\ue896", f"Обновить программу до {self.update[0]}", self.start_update, None), None] + self.base_menu
+        # a check mark per device: untick one to keep it off the taskbar, the card and the alerts
+        devs = [(None, d.name, lambda n=d.name: self.toggle_hidden(n), lambda n=d.name: n not in self.hidden)
+                for d in self.devices.values()]
+        v = self.update and self.update[0]
+        top = [("\ue896", L(f"Обновить программу до {v}", f"Update to {v}"), self.start_update, None), None] if v else []
+        return top + self.base_menu[:2] + devs + [None] * bool(devs) + self.base_menu[2:]
+
+    @property
+    def hidden(self):
+        h = self.cfg.get("hidden")
+        return h if isinstance(h, list) else []
+
+    def toggle_hidden(self, name):
+        h = self.hidden
+        self.cfg["hidden"] = [n for n in h if n != name] if name in h else h + [name]
+        save_cfg(self.cfg)
+
+    def shown(self):
+        return [d for d in self.devices.values() if d.name not in self.hidden]
 
     def update_loop(self):
         time.sleep(30)
@@ -874,7 +930,7 @@ class App:
         if not getattr(sys, "frozen", False):          # running from source: just show the release
             os.startfile(f"https://github.com/{REPO}/releases/latest")
             return
-        self.show_alert(None, "Скачиваю обновление…", GREY, 60)
+        self.show_alert(None, L("Скачиваю обновление…", "Downloading the update…"), GREY, 60)
         ver, url, sha = self.update
 
         def work():
@@ -889,13 +945,18 @@ class App:
 
 
     def poll_loop(self):
+        radio_at, woken = 0.0, True
         while True:
+            radio = woken or time.time() - radio_at >= self.interval - 1
             try:
-                self.result = read_all()      # picked up by tick() on the UI thread
+                self.result = read_all(radio), radio     # picked up by tick() on the UI thread
             except Exception:
                 pass
-            self.updated, self.polled_at = time.strftime("%H:%M"), time.time()
-            self.wake.wait(self.interval)
+            if radio:
+                radio_at = time.time()
+                self.updated, self.polled_at = time.strftime("%H:%M"), radio_at
+            # Bluetooth and DualShock 4 levels cost nothing to read, so they don't wait for the Razer schedule
+            woken = self.wake.wait(min(self.interval, POLL_OFFLINE))
             self.wake.clear()
 
     def pad_watch(self):
@@ -923,15 +984,20 @@ class App:
         return min((need(d) for d in self.devices.values()), default=POLL_OFFLINE)
 
     def apply(self, result):
+        entries, radio = result
         seen = set()
-        for pid, kind, name, state in result:
+        for pid, kind, name, state in entries:
+            if not radio and pid in self.devices and not str(pid).startswith(PASSIVE):
+                seen.add(pid)                 # repeated from the last radio poll: not a new reading to learn from
+                continue
             if isinstance(state, tuple):
                 self.answered.add(pid)
             elif pid not in self.answered and pid not in HEADSET_PIDS | MOUSE_PIDS:
                 continue                      # wired headset, nothing to show
-            dev = self.devices.get(pid)
+            # a pad or Bluetooth device missing from one read comes back with its alerts and history
+            dev = self.devices[pid] = self.devices.get(pid) or self.known.get(pid)
             if dev is None:
-                dev = self.devices[pid] = Device(pid, kind, name)
+                dev = self.devices[pid] = self.known[pid] = Device(pid, kind, name)
                 try:                          # continue the measurement from the previous run
                     track = self.cfg.get("track")
                     t0, l0, last = track.get(name, (0, 0, 0)) if isinstance(track, dict) else (0, 0, 0)
@@ -967,7 +1033,7 @@ class App:
             dev.alerted.difference_update(f"low{t}" for t in LOW_LEVELS)
             if level >= 100 and "full" not in dev.alerted:
                 dev.alerted.add("full")
-                self.show_alert(dev, "Заряд 100% — можно отключать", GREEN)
+                self.show_alert(dev, L("Заряд 100% — можно отключать", "Fully charged, you can unplug it"), GREEN)
             return
         dev.alerted.discard("full")
         if dev.hist and (gap or level > dev.hist[-1][1] + 1):
@@ -988,7 +1054,7 @@ class App:
         for th in LOW_LEVELS:
             if level <= th and f"low{th}" not in dev.alerted:
                 dev.alerted.update(f"low{t}" for t in LOW_LEVELS if t >= level)
-                self.show_alert(dev, f"Осталось {level}% — пора на зарядку", RED)
+                self.show_alert(dev, L(f"Осталось {level}% — пора на зарядку", f"{level}% left, time to charge"), RED)
                 break
 
     def save_track(self, dev, hist):
@@ -998,6 +1064,10 @@ class App:
             self.cfg["track"] = {}
         track = self.cfg["track"]
         if hist:
+            old = track.get(dev.name)
+            if isinstance(old, list) and len(old) == 3 and old[:2] == list(hist[0]) and \
+                    time.time() - float(old[2]) < POLL_ON_BATTERY:
+                return                        # Bluetooth is read every minute; the file needn't be written that often
             track[dev.name] = [hist[0][0], hist[0][1], time.time()]
         elif track.pop(dev.name, None) is None:
             return
@@ -1005,6 +1075,8 @@ class App:
 
     def show_alert(self, dev, text, color, seconds=8):
         # dev=None puts the text in the card's footer; the timer starts once it's actually on screen
+        if dev and dev.name in self.hidden:
+            return
         self.alert = (dev.pid if dev else None, text, color, None, seconds)
 
     def set_mode(self, mode):
@@ -1023,6 +1095,7 @@ class App:
         if not geom:
             return
         self.menu_open, self.alert, self.menu_hover = True, None, -1
+        self.menu_now = self.menu_items      # fixed while open: a poll adding a device must not shift the rows
         self.show(self.card, False)
         self.draw_menu(geom)
         self.show(self.pm, True)
@@ -1047,7 +1120,7 @@ class App:
         i = self.menu_index(y)
         if i >= 0:
             self.close_menu()
-            self.menu_items[i][2]()
+            self.menu_now[i][2]()
 
     def menu_watch(self, token):
         # the window never gets focus, so poll for Esc / clicks outside
@@ -1087,7 +1160,8 @@ class App:
             return
         if k32.WaitForSingleObject(self.show_ev, 0) == 0:          # the shortcut was clicked again
             k32.ResetEvent(self.show_ev)
-            self.show_alert(None, "Программа уже работает: заряд здесь, у часов", GREEN, 6)
+            self.show_alert(None, L("Программа уже работает: заряд здесь, у часов",
+                                    "Already running: battery levels are here, by the clock"), GREEN, 6)
         res = self.result
         if res is not self.handled:
             self.handled = res
@@ -1096,20 +1170,22 @@ class App:
             self.alert = None
         if self.update and self.update_seen != self.update[0]:
             self.update_seen = self.update[0]
-            self.show_alert(None, f"Вышла версия {self.update[0]}: правый клик → «Обновить программу»", GREEN, 10)
+            v = self.update[0]
+            self.show_alert(None, L(f"Вышла версия {v}: правый клик → «Обновить программу»",
+                                    f"Version {v} is out: right click → Update to {v}"), GREEN, 10)
         done, self.update_done = self.update_done, None
         if isinstance(done, Path):
             launch(done, "--after-update")
             self.quit()
             return
         if isinstance(done, Exception):
-            self.show_alert(None, f"Не удалось обновить: {str(done)[:60]}", RED, 10)
+            self.show_alert(None, L("Не удалось обновить: ", "Update failed: ") + str(done)[:60], RED, 10)
         dpi = u32.GetDpiForWindow(self.hwnd)
         if dpi and abs(dpi / 96 - self.s) > 0.01:          # scale changed
             self.s = dpi / 96
             for attr, (_, size) in self.fonts.items():
                 getattr(self, attr).configure(size=-self.px(size))
-        charging = any(isinstance(d.state, tuple) and d.state[1] for d in self.devices.values())
+        charging = any(isinstance(d.state, tuple) and d.state[1] for d in self.shown())
         self.phase = (self.phase + 1) % 2 if charging else 0
 
         geom = self.place()
@@ -1130,8 +1206,10 @@ class App:
         if geom:
             for win, hwnd in ((self.root, self.hwnd), (self.hit, self.hit_hwnd)):
                 self.set_window(win, geom)
-                own_by_taskbar(hwnd)
-                put_on_top(hwnd, geom)
+                # SetWindowPos on every tick was most of the idle CPU, so only when something moved
+                if own_by_taskbar(hwnd) or self.raised.get(hwnd) != geom or under_taskbar(hwnd):
+                    self.raised[hwnd] = geom
+                    put_on_top(hwnd, geom)
         if self.menu_open:
             if geom:
                 put_on_top(self.pm_hwnd)
@@ -1147,9 +1225,10 @@ class App:
 
     def set_names(self):
         """The widget is a canvas, so screen readers and UI Automation only see the window title."""
-        name = "; ".join(f"{d.name} {text}" + ("" if isinstance(st, tuple) else ", не в сети")
-                         + (", заряжается" if isinstance(st, tuple) and st[1] else "")
-                         for d, (_, text, st) in zip(self.devices.values(), self.items())) or "Razer: нет устройств"
+        name = "; ".join(f"{d.name} {text}" + ("" if isinstance(st, tuple) else L(", не в сети", ", offline"))
+                         + (L(", заряжается", ", charging") if isinstance(st, tuple) and st[1] else "")
+                         for d, (_, text, st) in zip(self.shown(), self.items())) or L("Razer: нет устройств",
+                                                                                       "Razer: no devices")
         if name != self.name:
             self.name = name
             for hwnd in (self.hwnd, self.hit_hwnd):
@@ -1171,10 +1250,11 @@ class App:
             win.geometry(spec)
 
     def items(self):
-        if not self.devices:
+        devs = self.shown()
+        if not devs:
             return [(ICONS["headset"], "…" if self.result is None else "—", None)]
         return [(ICONS[d.kind], f"{d.state[0]}%" if isinstance(d.state, tuple)
-                 else f"{d.last[0]}%" if d.last else "—", d.state) for d in self.devices.values()]
+                 else f"{d.last[0]}%" if d.last else "—", d.state) for d in devs]
 
     def item_width(self, text, st):
         return self.px(22) + self.f_text.measure(text) + (self.px(14) if isinstance(st, tuple) and st[1] else 0)
@@ -1215,6 +1295,10 @@ class App:
         fg = "#1a1a1a" if not notch and is_light(self.bg) else "#ffffff"
         W, H = geom[2], geom[3]
         cy = H // 2
+        drawn = (geom, self.items(), self.bg, notch, self.phase, self.s)
+        if drawn == self.drawn:               # repainting a keyed-out window costs CPU every tick
+            return
+        self.drawn = drawn
         c.delete("all")
         if notch:
             c.config(bg="#010203")
@@ -1241,20 +1325,23 @@ class App:
             return self.alert[1], self.alert[2]
         st = dev.state
         if not isinstance(st, tuple):
+            off = L(*OFFLINE_TEXT[dev.kind])
             if dev.last:
-                return f"{OFFLINE_TEXT[dev.kind]} · было {dev.last[0]}% в {dev.last[1]}", sub
-            return OFFLINE_TEXT[dev.kind], sub
+                return off + L(f" · было {dev.last[0]}% в {dev.last[1]}", f" · was {dev.last[0]}% at {dev.last[1]}"), sub
+            return off, sub
         level, charging = st
         if charging:
-            return ("Заряд полный" if level >= 100 else "Заряжается"), GREEN
+            return (L("Заряд полный", "Fully charged") if level >= 100 else L("Заряжается", "Charging")), GREEN
         rates = self.cfg.get("rates")
         rate = rates.get(dev.name) if isinstance(rates, dict) else None
         if isinstance(rate, (int, float)) and rate > 0:
-            return f"От батареи · хватит на {fmt_hours(level / rate)}", sub
+            return L("От батареи · хватит на ", "On battery · lasts ") + fmt_hours(level / rate), sub
         mins = int((time.time() - dev.hist[0][0]) / 60) if dev.hist else 0
         if mins < 30:
-            return f"От батареи · считаю расход: {mins} из 30 мин", sub
-        return "От батареи · считаю расход: жду, пока заряд снизится", sub
+            return L(f"От батареи · считаю расход: {mins} из 30 мин",
+                     f"On battery · measuring drain: {mins} of 30 min"), sub
+        return L("От батареи · считаю расход: жду, пока заряд снизится",
+                 "On battery · measuring drain: waiting for the level to drop"), sub
 
     def draw_menu(self, geom=None):
         p, c = self.px, self.pc
@@ -1265,8 +1352,8 @@ class App:
             self.menu_theme = light
             dwm_style(self.pm_hwnd, dark=not light)
         pad, rh, sh = p(4), p(32), p(9)
-        W = max(p(210), p(44) + max(self.f_text.measure(it[1]) for it in self.menu_items if it) + p(28))
-        H = 2 * pad + sum(rh if it else sh for it in self.menu_items)
+        W = max(p(210), p(44) + max(self.f_text.measure(it[1]) for it in self.menu_now if it) + p(28))
+        H = 2 * pad + sum(rh if it else sh for it in self.menu_now)
         if geom:                                     # right-aligned above the widget
             x, y, w, h = geom
             mx = min(max(x + w - W, p(8)), u32.GetSystemMetrics(0) - W - p(8))
@@ -1276,7 +1363,7 @@ class App:
         c.delete("all")
         c.config(bg=bg)
         self.menu_rows, yy = [], pad
-        for i, it in enumerate(self.menu_items):
+        for i, it in enumerate(self.menu_now):
             if it is None:
                 c.create_line(p(12), yy + sh // 2, W - p(12), yy + sh // 2, fill=line)
                 yy += sh
@@ -1299,12 +1386,14 @@ class App:
         if self.card_theme != light:
             self.card_theme = light
             dwm_style(self.card_hwnd, dark=not light)
-        devs, pad, row = list(self.devices.values()), p(18), p(74)
-        left = f"Обновлено в {self.updated}" if self.updated else ""
-        right, left_col = "ЛКМ — обновить · ПКМ — меню", sub
+        devs, pad, row = self.shown(), p(18), p(74)
+        left = L("Обновлено в ", "Updated at ") + self.updated if self.updated else ""
+        right, left_col = L("ЛКМ — обновить · ПКМ — меню", "Left click: refresh · Right click: menu"), sub
         if self.alert and self.alert[0] is None:
             left, right, left_col = self.alert[1], "", self.alert[2]
-        empty = "Ищу устройства…" if self.result is None else "Беспроводные устройства Razer не найдены"
+        empty = (L("Ищу устройства…", "Looking for devices…") if self.result is None
+                 else L("Все устройства скрыты: правый клик → меню", "All devices are hidden: right click for the menu")
+                 if self.devices else L("Беспроводные устройства не найдены", "No wireless devices found"))
         # fit the longest line
         W = 2 * pad + max([p(280), self.f_small.measure(left + right) + p(24), self.f_sub.measure(empty)]
                           + [self.f_sub.measure(self.status(d, sub)[0]) for d in devs]
