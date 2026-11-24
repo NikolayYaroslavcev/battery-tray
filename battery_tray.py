@@ -9,7 +9,7 @@ Protocol by what the HID report descriptor offers:
   feature report FF  state blob (Barracuda X 0536, Nari)
   feature, no id     classic 90-byte report, class 07 (mice, keyboards, BlackShark V2 Pro 2020)
 """
-import ctypes, ctypes.wintypes as wt, hashlib, json, os, re, shutil, subprocess, sys, threading, time, winreg
+import ctypes, ctypes.wintypes as wt, datetime, hashlib, json, os, re, shutil, subprocess, sys, threading, time, winreg
 import tkinter as tk, tkinter.font as tkfont, urllib.error, urllib.request
 from pathlib import Path
 
@@ -470,22 +470,32 @@ def read_headsetcontrol():
 
 # --- settings, autostart ---
 
-def load_cfg():
+HISTORY, HISTORY_DAYS = CFG.with_name("history.json"), 7     # levels of the last days, for the card's chart
+
+def load_cfg(path=CFG):
     try:
-        cfg = json.loads(CFG.read_text("utf-8"))
+        cfg = json.loads(path.read_text("utf-8"))
         return cfg if isinstance(cfg, dict) else {}
     except (OSError, ValueError):
         return {}
 
-def save_cfg(cfg):
+def load_history():
+    cut = time.time() - HISTORY_DAYS * 86400                          # devices not seen for a week drop out
+    ok = lambda p: isinstance(p, list) and len(p) == 2 and isinstance(p[0], (int, float)) and cut <= p[0] <= cut + (
+        HISTORY_DAYS * 86400 + 60) and (
+        p[1] is None or isinstance(p[1], int) and 0 <= p[1] <= 100)
+    hist = {name: [p for p in pts if ok(p)] for name, pts in load_cfg(HISTORY).items() if isinstance(pts, list)}
+    return {name: pts for name, pts in hist.items() if pts}
+
+def save_cfg(cfg, path=CFG):
     try:
-        CFG.parent.mkdir(parents=True, exist_ok=True)
-        tmp = CFG.with_suffix(".tmp")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(json.dumps(cfg))
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, CFG)          # a crash or power cut mid-write must not reset the settings and autostart
+        os.replace(tmp, path)         # a crash or power cut mid-write must not reset the settings and autostart
     except OSError:
         pass
 
@@ -847,6 +857,195 @@ def own_by_taskbar(hwnd):
         return True
 
 
+# --- tray mode: an ordinary notification-area icon with the level drawn in it ---
+
+WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+
+class _WndClass(ctypes.Structure):
+    _fields_ = [("style", wt.UINT), ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                ("hInstance", wt.HINSTANCE), ("hIcon", wt.HICON), ("hCursor", wt.HANDLE), ("hbrBackground", wt.HBRUSH),
+                ("lpszMenuName", wt.LPCWSTR), ("lpszClassName", wt.LPCWSTR)]
+
+class _NotifyIconData(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("hWnd", wt.HWND), ("uID", wt.UINT), ("uFlags", wt.UINT),
+                ("uCallbackMessage", wt.UINT), ("hIcon", wt.HICON), ("szTip", wt.WCHAR * 128), ("dwState", wt.DWORD),
+                ("dwStateMask", wt.DWORD), ("szInfo", wt.WCHAR * 256), ("uVersion", wt.UINT),
+                ("szInfoTitle", wt.WCHAR * 64), ("dwInfoFlags", wt.DWORD), ("guidItem", wt.DWORD * 4),
+                ("hBalloonIcon", wt.HICON)]
+
+class _MonitorInfo(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
+
+class _IconInfo(ctypes.Structure):
+    _fields_ = [("fIcon", wt.BOOL), ("xHotspot", wt.DWORD), ("yHotspot", wt.DWORD), ("hbmMask", wt.HBITMAP),
+                ("hbmColor", wt.HBITMAP)]
+
+shell32 = ctypes.windll.shell32
+shell32.Shell_NotifyIconW.argtypes = [wt.DWORD, ctypes.c_void_p]
+u32.DefWindowProcW.restype, u32.DefWindowProcW.argtypes = ctypes.c_ssize_t, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+u32.RegisterClassW.argtypes = [ctypes.c_void_p]
+u32.CreateWindowExW.restype = wt.HWND
+u32.CreateWindowExW.argtypes = [wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD] + [ctypes.c_int] * 4 + [
+    wt.HWND, wt.HMENU, wt.HINSTANCE, ctypes.c_void_p]
+u32.GetMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT]
+u32.TranslateMessage.argtypes = u32.DispatchMessageW.argtypes = [ctypes.POINTER(wt.MSG)]
+u32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+u32.RegisterWindowMessageW.restype, u32.RegisterWindowMessageW.argtypes = wt.UINT, [wt.LPCWSTR]
+u32.MonitorFromPoint.restype, u32.MonitorFromPoint.argtypes = wt.HANDLE, [wt.POINT, wt.DWORD]
+u32.GetMonitorInfoW.argtypes = [wt.HANDLE, ctypes.c_void_p]
+u32.CreateIconIndirect.restype, u32.CreateIconIndirect.argtypes = wt.HICON, [ctypes.c_void_p]
+u32.DestroyIcon.argtypes = [wt.HICON]
+k32.GetModuleHandleW.restype, k32.GetModuleHandleW.argtypes = wt.HMODULE, [wt.LPCWSTR]
+gdi.CreateCompatibleDC.restype, gdi.CreateCompatibleDC.argtypes = wt.HDC, [wt.HDC]
+gdi.CreateDIBSection.restype = wt.HBITMAP
+gdi.CreateDIBSection.argtypes = [wt.HDC, ctypes.c_void_p, wt.UINT, ctypes.POINTER(ctypes.c_void_p), wt.HANDLE, wt.DWORD]
+gdi.CreateBitmap.restype, gdi.CreateBitmap.argtypes = wt.HBITMAP, [ctypes.c_int, ctypes.c_int, wt.UINT, wt.UINT,
+                                                                   ctypes.c_void_p]
+gdi.CreateFontW.restype = wt.HFONT
+gdi.CreateFontW.argtypes = [ctypes.c_int] * 5 + [wt.DWORD] * 8 + [wt.LPCWSTR]
+gdi.SelectObject.restype, gdi.SelectObject.argtypes = wt.HGDIOBJ, [wt.HDC, wt.HGDIOBJ]
+gdi.DeleteObject.argtypes, gdi.DeleteDC.argtypes = [wt.HGDIOBJ], [wt.HDC]
+gdi.SetTextColor.argtypes, gdi.SetBkMode.argtypes = [wt.HDC, wt.DWORD], [wt.HDC, ctypes.c_int]
+gdi.GetTextExtentPoint32W.argtypes = [wt.HDC, wt.LPCWSTR, ctypes.c_int, ctypes.POINTER(wt.SIZE)]
+gdi.TextOutW.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int, wt.LPCWSTR, ctypes.c_int]
+
+WM_TRAY, WM_TRAY_SYNC, WM_CONTEXTMENU = 0x8001, 0x8002, 0x007B
+NIN_SELECT, NIN_KEYSELECT, NIN_POPUPOPEN, NIN_POPUPCLOSE = 0x400, 0x401, 0x406, 0x407
+
+def level_icon(text, rgb, size):
+    """HICON of text in colour rgb on a transparent square. GDI can't draw alpha, so the text is drawn white on
+    black, its antialiasing becomes the alpha, and the ink is centred by its real bounds, not the font's box."""
+    big = 2 * size
+    dc = gdi.CreateCompatibleDC(None)
+    head = (ctypes.c_int32 * 10)(40, big, -big, 1 | 32 << 16)          # BITMAPINFOHEADER, 32 bpp top-down
+    bits = ctypes.c_void_p()
+    canvas = gdi.CreateDIBSection(dc, ctypes.byref(head), 0, ctypes.byref(bits), None, 0)
+    old_bmp = gdi.SelectObject(dc, canvas)
+    gdi.SetBkMode(dc, 1)                                              # TRANSPARENT
+    gdi.SetTextColor(dc, 0xFFFFFF)
+    ext, probe = wt.SIZE(), text if len(text) > 1 else text * 2     # 9 no bigger than 10
+    for h in range(int(size * 1.4), 4, -1):                           # the biggest that fits across
+        font = gdi.CreateFontW(-h, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 4, 0, "Segoe UI")   # bold, greyscale antialiased
+        old_font = gdi.SelectObject(dc, font)
+        gdi.GetTextExtentPoint32W(dc, probe, len(probe), ctypes.byref(ext))
+        if ext.cx <= size + 1 or h == 5:
+            break
+        gdi.SelectObject(dc, old_font)
+        gdi.DeleteObject(font)
+    gdi.GetTextExtentPoint32W(dc, text, len(text), ctypes.byref(ext))
+    gdi.TextOutW(dc, (big - ext.cx) // 2, (big - ext.cy) // 2, text, len(text))
+    ctypes.windll.gdi32.GdiFlush()
+    px = (ctypes.c_uint32 * (big * big)).from_address(bits.value)
+    ink = [(i % big, i // big) for i in range(big * big) if px[i] & 0xFF]
+    out = (ctypes.c_uint32 * (size * size))()
+    if ink:
+        dx = (size - 1 - max(x for x, _ in ink) - min(x for x, _ in ink)) // 2
+        dy = (size - 1 - max(y for _, y in ink) - min(y for _, y in ink)) // 2
+        r, g, b = (int(rgb[i:i + 2], 16) for i in (1, 3, 5))
+        for x, y in ink:
+            if 0 <= x + dx < size and 0 <= y + dy < size:
+                out[(y + dy) * size + x + dx] = (px[y * big + x] & 0xFF) << 24 | r << 16 | g << 8 | b
+    gdi.SelectObject(dc, old_font)
+    gdi.DeleteObject(font)
+    gdi.SelectObject(dc, old_bmp)
+    gdi.DeleteObject(canvas)
+    head[1], head[2] = size, -size
+    color = gdi.CreateDIBSection(dc, ctypes.byref(head), 0, ctypes.byref(bits), None, 0)
+    ctypes.memmove(bits.value, out, size * size * 4)
+    mask = gdi.CreateBitmap(size, size, 1, 1, None)
+    icon = u32.CreateIconIndirect(ctypes.byref(_IconInfo(True, 0, 0, mask, color)))
+    gdi.DeleteObject(mask)
+    gdi.DeleteObject(color)
+    gdi.DeleteDC(dc)
+    return icon
+
+
+class Tray:
+    """The icon's window lives in a thread of its own: a window of Tk's thread would run Python inside Tk's event
+    loop. Events reach the UI thread through root.after, which tkinter hands over between threads; the UI thread
+    never waits for this one (it only posts), so the two can't lock each other up."""
+
+    def __init__(self, on_event):
+        self.on_event, self.hwnd, self.shown, self.icon = on_event, None, None, None
+        self.want = None                    # (text, colour, tooltip) wanted by the UI thread, None: no icon
+        self.balloons = []                  # (title, text, warning) for Windows notifications, oldest first
+        threading.Thread(target=self.run, daemon=True).start()
+
+    def post(self):
+        if self.hwnd:
+            u32.PostMessageW(self.hwnd, WM_TRAY_SYNC, 0, 0)
+
+    def run(self):
+        self.proc = WNDPROC(self.wndproc)   # kept alive: Windows calls it for as long as the window exists
+        cls = _WndClass(lpfnWndProc=self.proc, hInstance=k32.GetModuleHandleW(None), lpszClassName=f"{APP}.tray")
+        u32.RegisterClassW(ctypes.byref(cls))
+        self.restarted = u32.RegisterWindowMessageW("TaskbarCreated")           # explorer came back: add again
+        self.hwnd = u32.CreateWindowExW(0, cls.lpszClassName, TITLE, 0, 0, 0, 0, 0, None, None, cls.hInstance, None)
+        u32.PostMessageW(self.hwnd, WM_TRAY_SYNC, 0, 0)                         # first sync in wndproc's try
+        msg = wt.MSG()
+        while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            u32.TranslateMessage(ctypes.byref(msg))
+            u32.DispatchMessageW(ctypes.byref(msg))
+
+    def data(self, flags):
+        return _NotifyIconData(cbSize=ctypes.sizeof(_NotifyIconData), hWnd=self.hwnd, uID=1, uFlags=flags,
+                               uCallbackMessage=WM_TRAY)
+
+    def sync(self):
+        want = self.want
+        if want is None:
+            self.remove()
+            return
+        if want != self.shown:
+            d = self.data(0x1 | 0x2 | 0x4)                                 # MESSAGE | ICON | TIP
+            d.hIcon, d.szTip = level_icon(want[0], want[1], u32.GetSystemMetrics(49)), want[2][:127]
+            if self.shown is None:                                         # NIM_ADD; one that timed out may still
+                ok = shell32.Shell_NotifyIconW(0, ctypes.byref(d)) or shell32.Shell_NotifyIconW(1, ctypes.byref(d))
+                if ok:                                                     # have happened, then NIM_MODIFY works
+                    d.uVersion = 4                                         # rich events, our card instead of a tip
+                    shell32.Shell_NotifyIconW(4, ctypes.byref(d))          # NIM_SETVERSION
+            else:
+                ok = shell32.Shell_NotifyIconW(1, ctypes.byref(d))         # NIM_MODIFY
+            old, self.icon = (self.icon, d.hIcon) if ok else (d.hIcon, self.icon)
+            if old:
+                u32.DestroyIcon(old)
+            # an icon gone without TaskbarCreated fails NIM_MODIFY: forget it, so the UI's retry adds it again
+            self.shown = want if ok else None
+        while self.balloons and self.shown is not None:
+            title, text, warn, at = self.balloons.pop(0)
+            if time.time() - at < 60:                                      # not one held up for long, out of date
+                d = self.data(0x10)                                        # INFO: a Windows notification
+                d.szInfoTitle, d.szInfo, d.dwInfoFlags = title[:63], text[:255], (2 if warn else 1) | 0x80
+                shell32.Shell_NotifyIconW(1, ctypes.byref(d))
+
+    def remove(self):
+        if self.shown is not None:
+            shell32.Shell_NotifyIconW(2, ctypes.byref(self.data(0)))       # NIM_DELETE
+            self.shown = None
+
+    def wndproc(self, hwnd, msg, wp, lp):
+        try:
+            if msg == WM_TRAY and lp & 0xFFFF in (NIN_SELECT, NIN_KEYSELECT, WM_CONTEXTMENU, NIN_POPUPOPEN,
+                                                   NIN_POPUPCLOSE):
+                self.on_event(lp & 0xFFFF, ctypes.c_short(wp & 0xFFFF).value, ctypes.c_short(wp >> 16 & 0xFFFF).value)
+            elif msg == WM_TRAY_SYNC:
+                self.sync()
+            elif msg == self.restarted:
+                self.shown = None
+                self.sync()
+        except Exception:                   # never let an exception unwind through Windows
+            pass
+        return u32.DefWindowProcW(hwnd, msg, wp, lp)
+
+
+def taskbar_light():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+            return winreg.QueryValueEx(k, "SystemUsesLightTheme")[0] == 1
+    except OSError:
+        return False
+
+
 # --- UI ---
 
 GREEN, GREEN_DIM, AMBER, RED, GREY = "#30d158", "#1f7a37", "#ffd60a", "#ff453a", "#8e8e93"
@@ -882,6 +1081,7 @@ class App:
         except (AttributeError, OSError):
             pass
         self.cfg = load_cfg()
+        self.history = load_history()                       # name -> [[time, level or None when off], ...]
         self.root = r = tk.Tk()
         self.s = r.winfo_fpixels("1i") / 96
         fams = set(tkfont.families())
@@ -894,6 +1094,10 @@ class App:
         for attr, (family, size) in self.fonts.items():
             setattr(self, attr, tkfont.Font(family=family, size=-self.px(size)))
         self.card_theme = self.menu_theme = self.drawn = None
+        # tray mode: the icon (made on first use), where it was last pointed at, hovered or clicked open
+        self.tray, self.tray_at, self.tray_hover, self.tray_pinned, self.tray_posted = None, None, False, False, 0.0
+        self.card_token = 0
+        self.below = False                                  # cards and the menu open below their anchor
         self.raised = {}                                    # hwnd -> geometry it was last raised with
         self.notch_now = False
 
@@ -928,7 +1132,7 @@ class App:
         self.name = None                                    # window title, what UI Automation reads
         self.wake = threading.Event()
 
-        self.mode = tk.StringVar(value="notch" if self.cfg.get("mode") == "notch" else "taskbar")
+        self.mode = tk.StringVar(value=self.cfg.get("mode") if self.cfg.get("mode") in ("notch", "tray") else "taskbar")
         self.autostart = autostart_enabled()
         # (icon, label, action, checked); None is a separator
         self.base_menu = [
@@ -938,6 +1142,7 @@ class App:
              lambda: self.mode.get() == "taskbar"),
             (None, L("Чёлка сверху", "Notch at the top"), lambda: self.set_mode("notch"),
              lambda: self.mode.get() == "notch"),
+            (None, L("Значок в трее", "Tray icon"), lambda: self.set_mode("tray"), lambda: self.mode.get() == "tray"),
             None,
             (None, L("Запускать с Windows", "Start with Windows"), self.toggle_autostart, lambda: self.autostart),
             (None, L("Проверять обновления", "Check for updates"), self.toggle_updates,
@@ -1102,8 +1307,23 @@ class App:
                 dev.last = (state[0], time.strftime("%H:%M"))
             seen.add(pid)
             self.track(dev)
+            self.record(dev, dev.state[0] if isinstance(dev.state, tuple) else None)
+        for pid, dev in self.devices.items():
+            if pid not in seen:               # a pad unplugged, a Logitech mouse asleep: off, for the chart
+                self.record(dev, None)
         self.devices = {pid: d for pid, d in sorted(self.devices.items(), key=lambda kv: list(ICONS).index(kv[1].kind))
                         if pid in seen}
+
+    def record(self, dev, level):
+        """A point for the chart on every change and at least hourly while on; one point when it goes off."""
+        now = int(time.time())
+        # points from the future (the clock was ahead and has been put back) would draw the line backwards
+        pts = [p for p in self.history.get(dev.name) or [] if now - HISTORY_DAYS * 86400 <= p[0] <= now]
+        self.history[dev.name] = pts
+        if pts and pts[-1][1] == level and (level is None or now - pts[-1][0] < 3600) or not pts and level is None:
+            return
+        pts.append([now, level])
+        save_cfg(self.history, HISTORY)
 
     def track(self, dev):
         """Discharge rate learning and low/full alerts."""
@@ -1163,15 +1383,103 @@ class App:
         save_cfg(self.cfg)
 
     def show_alert(self, dev, text, color, seconds=8):
-        # dev=None puts the text in the card's footer; the timer starts once it's actually on screen
+        # dev=None puts the text in the card's footer; the timer starts once it's actually on screen.
+        # As a tray icon nothing pops up by itself, so warnings become Windows notifications.
         if dev and dev.name in self.hidden:
             return
+        if self.mode.get() == "tray":
+            self.notify(dev.name if dev else TITLE, text, color == RED)
+            return
         self.alert = (dev.pid if dev else None, text, color, None, seconds)
+
+    def notify(self, title, text, warn=False):
+        self.tray_icon().balloons.append((title, text, warn, time.time()))
+        self.tray.post()
 
     def set_mode(self, mode):
         self.mode.set(mode)
         self.cfg["mode"] = mode
         save_cfg(self.cfg)
+        if mode == "tray":                    # Windows 11 tucks new icons away under the arrow
+            self.notify(TITLE, L("Заряд теперь в значке в трее. Если его не видно, он под стрелкой ^ у часов: "
+                                 "перетащите его на панель задач.",
+                                 "The level is now a tray icon. If you can't see it, it's under the ^ arrow by the "
+                                 "clock: drag it onto the taskbar."))
+
+    # --- tray mode ---
+
+    def tray_icon(self):
+        if self.tray is None:
+            def handed_over(ev, x, y):        # the icon's thread: run the handler in Tk's
+                try:
+                    self.root.after(0, self.tray_event, ev, x, y)
+                except Exception:             # Tk already gone
+                    pass
+            self.tray = Tray(handed_over)
+        return self.tray
+
+    def tray_event(self, ev, x, y):
+        if ev != NIN_POPUPCLOSE:              # where the icon is; what comes with a close isn't documented
+            self.tray_at = (x, y)
+        if ev == NIN_POPUPOPEN:
+            self.tray_hover = True
+        elif ev == NIN_POPUPCLOSE:
+            self.tray_hover = False
+        elif ev == WM_CONTEXTMENU:
+            self.open_menu()
+        elif self.menu_open:                  # a click on the icon closes the menu, as one anywhere else would
+            self.close_menu()
+        elif self.tray_pinned:                # a click closes the card it opened
+            self.tray_pinned = self.tray_hover = False
+        else:                                 # a click keeps the card open and gets fresh numbers
+            self.tray_pinned = True
+            self.wake.set()
+            self.card_token += 1
+            self.root.after(150, self.card_watch, self.card_token)
+        self.tick(again=False)                # now, not at the next tick
+
+    def card_watch(self, token):
+        """A card opened by a click stays until Esc or a click elsewhere: it never has focus to lose."""
+        if not self.tray_pinned or token != self.card_token:
+            return
+        pt = wt.POINT()
+        u32.GetCursorPos(ctypes.byref(pt))
+        clicked = any(u32.GetAsyncKeyState(vk) & 0x8000 for vk in (0x01, 0x02, 0x04))
+        on_icon = self.tray_at and abs(pt.x - self.tray_at[0]) < self.px(16) and abs(pt.y - self.tray_at[1]) < self.px(16)
+        on_card = self.card_geom and inside(self.card_geom, pt)
+        if u32.GetAsyncKeyState(0x1B) & 0x8000 or clicked and not on_icon and not on_card:
+            self.tray_pinned = self.tray_hover = False
+            self.tick(again=False)
+            return
+        self.root.after(40, self.card_watch, token)
+
+    def tray_anchor(self):
+        """A flat rect on the taskbar edge of the work area, under the icon: the card and the menu open off it."""
+        if not self.tray_at:
+            return None
+        pt, mi = wt.POINT(*self.tray_at), _MonitorInfo(cbSize=ctypes.sizeof(_MonitorInfo))
+        u32.GetMonitorInfoW(u32.MonitorFromPoint(pt, 2), ctypes.byref(mi))   # MONITOR_DEFAULTTONEAREST
+        m, w = mi.rcMonitor, mi.rcWork
+        self.below = pt.y < (m.top + m.bottom) // 2                         # taskbar at the top
+        return pt.x - 1, (w.top if self.below else w.bottom), 2, 0
+
+    def tray_sync(self, on):
+        """The icon shows the device that needs charging first, coloured like the widget."""
+        want = None
+        if on:
+            light = is_light(self.bg)
+            fg, amber, red, green = ("#1a1a1a", "#8a5300", "#c42b1c", "#0e7a0d") if light else ("#ffffff", AMBER, RED, GREEN)
+            states = [d.state for d in self.shown() if isinstance(d.state, tuple)]
+            if states:
+                level, charging = min(states, key=lambda s: s[0])
+                want = (str(level), green if charging else fg if level > 35 else amber if level > 20 else red,
+                        self.name or TITLE)
+            else:
+                want = ("–", GREY, self.name or TITLE)
+        tray = self.tray_icon() if want else self.tray
+        if tray and (want != tray.want or want and tray.shown is None and time.time() - self.tray_posted > 5):
+            tray.want, self.tray_posted = want, time.time()        # retried: at logon explorer may not be up yet
+            tray.post()
 
     def toggle_autostart(self):
         self.autostart = not self.autostart
@@ -1180,10 +1488,11 @@ class App:
     # --- menu ---
 
     def open_menu(self, e=None):
-        geom = self.place()
+        geom = self.tray_anchor() if self.mode.get() == "tray" else self.place()
         if not geom:
             return
         self.menu_open, self.alert, self.menu_hover = True, None, -1
+        self.tray_pinned = self.tray_hover = False   # the menu replaces the card; it doesn't come back after
         self.menu_now = self.menu_items      # fixed while open: a poll adding a device must not shift the rows
         self.show(self.card, False)
         self.draw_menu(geom)
@@ -1224,7 +1533,7 @@ class App:
         self.root.after(40, self.menu_watch, token)
 
 
-    def tick(self):
+    def tick(self, again=True):
         # an exception here would silently freeze the widget under pythonw
         try:
             self.update_ui()
@@ -1232,11 +1541,14 @@ class App:
             import traceback
             CFG.parent.mkdir(parents=True, exist_ok=True)
             (CFG.parent / "error.log").write_text(traceback.format_exc(), "utf-8")
-        if not self.quitting:
+        if again and not self.quitting:
             self.root.after(500, self.tick)
 
     def quit(self):
         self.quitting = True
+        if self.tray:                         # from here: the process ends before the icon's thread would get to it
+            self.tray.want = None
+            self.tray.remove()
         self.root.destroy()
 
     def update_ui(self):
@@ -1277,19 +1589,32 @@ class App:
         charging = any(isinstance(d.state, tuple) and d.state[1] for d in self.shown())
         self.phase = (self.phase + 1) % 2 if charging else 0
 
-        geom = self.place()
+        tray = self.mode.get() == "tray"
+        geom = None if tray else self.place()               # the widget's rect; none as a tray icon
+        if tray:
+            self.notch_now = False
+            if time.time() - self.bg_checked > 5:
+                self.bg_checked, self.bg = time.time(), "#f3f3f3" if taskbar_light() else "#1c1c1c"
+        anchor = self.tray_anchor() if tray else geom       # what the card and the menu open off
+        if not tray:
+            self.below = self.notch_now
         # keyed-out pixels get no mouse events, so check the cursor ourselves
         pt = wt.POINT()
         u32.GetCursorPos(ctypes.byref(pt))
         card_up = self.card.winfo_ismapped() and self.card_geom
+        near_card = bool(card_up and inside(self.card_geom, pt, self.px(12)))
+        if tray and self.tray_hover and not near_card and self.tray_at and max(
+                abs(pt.x - self.tray_at[0]), abs(pt.y - self.tray_at[1])) > self.px(48):
+            self.tray_hover = False           # a NIN_POPUPCLOSE that never came must not keep the card up
         was_hover = self.hover
-        self.hover = bool(geom) and (inside(geom, pt) or bool(card_up and inside(self.card_geom, pt, self.px(12))))
+        self.hover = ((self.tray_hover or self.tray_pinned or near_card) if tray
+                      else bool(geom) and (inside(geom, pt) or near_card))
         if self.hover and not was_hover and time.time() - self.polled_at > HOVER_REFRESH:
             self.wake.set()                   # someone is looking: get fresh numbers
         self.interval = self.poll_interval()
+        self.set_names()
         if geom:
             self.draw_widget(geom)
-            self.set_names()
         self.show(self.root, bool(geom))
         self.show(self.hit, bool(geom))
         if geom:
@@ -1300,17 +1625,18 @@ class App:
                     self.raised[hwnd] = geom
                     put_on_top(hwnd, geom)
         if self.menu_open:
-            if geom:
+            if anchor:
                 put_on_top(self.pm_hwnd)
             else:
                 self.close_menu()
-        card = bool(geom) and ((self.hover and not self.menu_open) or self.alert is not None)
+        card = bool(anchor) and ((self.hover and not self.menu_open) or self.alert is not None and not tray)
         if card:
-            self.draw_card(geom)
+            self.draw_card(anchor)
             put_on_top(self.card_hwnd)
             if self.alert and self.alert[3] is None:
                 self.alert = self.alert[:3] + (time.time() + self.alert[4], self.alert[4])
         self.show(self.card, card)
+        self.tray_sync(tray)
 
     def set_names(self):
         """The widget is a canvas, so screen readers and UI Automation only see the window title."""
@@ -1446,7 +1772,7 @@ class App:
         if geom:                                     # right-aligned above the widget
             x, y, w, h = geom
             mx = min(max(x + w - W, p(8)), u32.GetSystemMetrics(0) - W - p(8))
-            my = y + h + p(10) if self.notch_now else y - H - p(10)
+            my = y + h + p(10) if self.below else y - H - p(10)
             self.menu_geom = (mx, my, W, H)
             self.set_window(self.pm, self.menu_geom)
         c.delete("all")
@@ -1476,6 +1802,9 @@ class App:
             self.card_theme = light
             dwm_style(self.card_hwnd, dark=not light)
         devs, pad, row = self.shown(), p(18), p(74)
+        charts = [self.history.get(d.name) for d in devs]
+        charts = [h if sum(v is not None for _, v in h or []) >= 2 else None for h in charts]
+        rows = [row + (p(60) if h else 0) for h in charts]
         left = L("Обновлено в ", "Updated at ") + self.updated if self.updated else ""
         right, left_col = L("ЛКМ — обновить · ПКМ — меню", "Left click: refresh · Right click: menu"), sub
         if self.alert and self.alert[0] is None:
@@ -1488,10 +1817,10 @@ class App:
                           + [self.f_sub.measure(self.status(d, sub)[0]) for d in devs]
                           + [p(26) + self.f_name.measure(d.name) + p(20) + self.f_big.measure("100%") + p(16)
                              for d in devs])
-        H = pad + max(1, len(devs)) * row + p(34)
+        H = pad + (sum(rows) if devs else row) + p(34)
         x, y, w, h = geom
         cx = min(max(x + w // 2 - W // 2, p(8)), u32.GetSystemMetrics(0) - W - p(8))
-        cy = y + h + p(10) if self.notch_now else y - H - p(10)
+        cy = y + h + p(10) if self.below else y - H - p(10)
         self.card_geom = (cx, cy, W, H)
         self.set_window(self.card, self.card_geom)
         c.delete("all")
@@ -1499,8 +1828,8 @@ class App:
 
         if not devs:
             c.create_text(pad, pad + row // 2 - p(8), text=empty, font=self.f_sub, fill=sub, anchor="w")
-        for i, d in enumerate(devs):
-            y0 = pad + i * row
+        y0 = pad
+        for d, hist, rh in zip(devs, charts, rows):
             level = d.state[0] if isinstance(d.state, tuple) else d.last[0] if d.last else None
             charging = isinstance(d.state, tuple) and d.state[1]
             c.create_text(pad, y0 + p(12), text=ICONS[d.kind], font=(self.icon_font, -p(16)), fill=fg, anchor="w")
@@ -1518,10 +1847,62 @@ class App:
                               fill=level_color(d.state, GREEN), capstyle="round")
             text, col = self.status(d, sub)
             c.create_text(pad, y0 + p(54), text=text, font=self.f_sub, fill=col, anchor="w")
+            if hist:
+                self.draw_chart(hist, isinstance(d.state, tuple), pad, W - pad, y0 + p(74), y0 + p(106),
+                                light, bg, sub, track)
+            y0 += rh
         fy = H - p(34)
         c.create_line(0, fy, W, fy, fill=line)
         c.create_text(pad, fy + p(17), text=left, font=self.f_small, fill=left_col, anchor="w")
         c.create_text(W - pad, fy + p(17), text=right, font=self.f_small, fill=sub, anchor="e")
+
+    def draw_chart(self, pts, online, x0, x1, top, bottom, light, bg, sub, grid):
+        """The level over the last days: a line with a faint wash under it, broken where the device was off or
+        the PC asleep; midnights as hairlines, the weekday under each day."""
+        p, c, now = self.px, self.cc, time.time()
+        t0 = now - HISTORY_DAYS * 86400
+        X = lambda t: x0 + (x1 - x0) * (min(max(t, t0), now) - t0) / (now - t0)
+        Y = lambda v: bottom - (bottom - top) * v / 100
+        series = "#2a78d6" if light else "#3987e5"          # validated against both card surfaces
+        c.create_line(x0, bottom, x1, bottom, fill=grid)
+        days = L("пн вт ср чт пт сб вс", "Mon Tue Wed Thu Fri Sat Sun").split()
+        today = datetime.date.today()
+        for k in range(HISTORY_DAYS + 1):
+            day = today - datetime.timedelta(days=k)
+            start, end = time.mktime(day.timetuple()), time.mktime((day + datetime.timedelta(days=1)).timetuple())
+            if end <= t0:
+                break
+            if start > t0:
+                c.create_line(X(start), top, X(start), bottom, fill=grid)
+            name = days[day.weekday()]
+            if X(min(end, now)) - X(start) >= self.f_small.measure(name) + p(6):
+                c.create_text((X(start) + X(min(end, now))) / 2, bottom + p(11), text=name, font=self.f_small, fill=sub)
+        runs, run, last = [], [], None
+        for t, v in pts:
+            gap = last is not None and t - last[0] > 2 * 3600 + 600      # points come at least hourly while on
+            if v is None or gap:
+                if run and v is None and not gap:
+                    run.append((X(t), Y(last[1])))                       # it stayed there until it went off
+                runs.append(run)
+                run, last = [], None
+                if v is None:
+                    continue
+            run.append((X(t), Y(v)))
+            last = (t, v)
+        live = bool(run) and online and now - last[0] <= 2 * 3600 + 600
+        if live:
+            run.append((X(now), Y(last[1])))
+        runs.append(run)
+        wash = "#%02x%02x%02x" % tuple(int(0.12 * int(series[i:i + 2], 16) + 0.88 * int(bg[i:i + 2], 16))
+                                       for i in (1, 3, 5))
+        for r in runs:
+            if len(r) >= 2:
+                c.create_polygon([(r[0][0], bottom)] + r + [(r[-1][0], bottom)], fill=wash, outline="")
+                c.create_line(r, fill=series, width=p(2), capstyle="round", joinstyle="round")
+        if live:                                               # now: a dot with a ring of the card's colour
+            x, y = run[-1]
+            for rad, col in ((p(6), bg), (p(4), series)):
+                c.create_oval(x - rad, y - rad, x + rad, y + rad, fill=col, outline="")
 
 
 def main():

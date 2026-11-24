@@ -50,13 +50,15 @@ Windows показывает это окно для любой программ�
 
 A small entry per device left of the tray icons: a headset, mouse or keyboard icon and the percentage. The background is transparent, so it sits on whatever taskbar you have (dark, light, accent colour, acrylic, TranslucentTB). The number turns yellow below 35% and red below 20%, and a lightning icon blinks while the device charges.
 
-Hover over it and a card opens with a bar per device, the charging state and an estimate of how long the battery will last. The estimate is learned from how fast your own device actually drains, so the first one appears after about half an hour on battery. After that it is remembered.
+Hover over it and a card opens with a bar per device, the charging state and an estimate of how long the battery will last. The estimate is learned from how fast your own device actually drains, so the first one appears after about half an hour on battery. After that it is remembered. Under each device the card draws its level over the last seven days, with a gap wherever the device was off or the PC asleep.
 
 When a device goes to sleep or is switched off, its last level stays on the taskbar, dimmed, and the card says when it was read.
 
 A warning pops up at 20% and again at 10%, and once more when a device finishes charging. If a game or video is fullscreen at that moment, the warning waits until you leave it. The widget itself hides during fullscreen apps and never takes focus away from them.
 
-Left click refreshes. Right click opens the menu: refresh, a check mark per device (untick one to keep it off the taskbar, the card and the warnings), taskbar or "notch" mode (a small black pill at the top of the screen), start with Windows, exit.
+Left click refreshes. Right click opens the menu: refresh, a check mark per device (untick one to keep it off the taskbar, the card and the warnings), taskbar, "notch" (a small black pill at the top of the screen) or tray icon mode, start with Windows, exit.
+
+In tray icon mode the level is an ordinary icon in the notification area instead: it shows the device that needs charging first, in the same colours. Hovering over it opens the card, a click keeps the card open, right click opens the menu, and the warnings arrive as Windows notifications. Windows 11 puts new icons under the ^ arrow next to the clock at first; drag it onto the taskbar to keep it in sight.
 
 It uses about 20 MB of RAM and close to zero CPU. Every battery query wakes the headset's radio, so while a device runs on battery it is asked only every 20 minutes, which leaves the headset free to switch itself off when idle. Hovering over the widget fetches fresh numbers right away, and so does waking the PC from sleep. While charging it checks every 5 minutes, and a device that's off is looked for once a minute (that only talks to the dongle). Bluetooth devices and DualShock 4 controllers are read every minute, since their level is already there and reading it sends nothing to them.
 
@@ -128,7 +130,7 @@ The program goes through every Razer HID collection (vendor id `1532`) whose nam
 
 The protocol details and the list of wireless mice come from [OpenRazer](https://github.com/openrazer/openrazer), [HaloBattery](https://github.com/Waturus/HaloBattery) and [Barracuda_X_Helpers](https://github.com/GigaVibeSlopper67/Barracuda_X_Helpers). Thanks to their authors.
 
-Settings and the learned drain rate are stored in `%APPDATA%\BatteryTray\config.json`.
+Settings and the learned drain rate are stored in `%APPDATA%\BatteryTray\config.json`, the levels of the last seven days in `history.json` next to it.
 
 Not affiliated with Razer.
 
