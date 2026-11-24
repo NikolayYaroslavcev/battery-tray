@@ -27,14 +27,11 @@ jobs:
       - run: pip install -r requirements-build.txt
       - run: pyinstaller --onefile --noconsole --icon icon.ico --name BatteryTray battery_tray.py
 
-      # Razer Battery Tray 1.x updates itself only from an asset with its own name; the new exe moves it over.
-      # Needed until the repository is renamed, after that 1.x can't find releases anyway.
       - name: Zip, hash, write release notes
         shell: pwsh
         run: |
-          Copy-Item dist/BatteryTray.exe dist/RazerBatteryIndicator.exe
           Compress-Archive dist/BatteryTray.exe dist/BatteryTray.zip
-          $hashes = Get-FileHash dist/BatteryTray.exe, dist/BatteryTray.zip, dist/RazerBatteryIndicator.exe |
+          $hashes = Get-FileHash dist/BatteryTray.exe, dist/BatteryTray.zip |
             ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" }
           $run = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           $fence = '```'
@@ -46,4 +43,4 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/BatteryTray.exe dist/BatteryTray.zip dist/RazerBatteryIndicator.exe --title "${{ github.ref_name }}" --notes-file notes.md
+        run: gh release create "${{ github.ref_name }}" dist/BatteryTray.exe dist/BatteryTray.zip --title "${{ github.ref_name }}" --notes-file notes.md
