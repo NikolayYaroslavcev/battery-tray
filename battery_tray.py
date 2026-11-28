@@ -1233,8 +1233,8 @@ class App:
                     if rel and is_newer(rel[0], VERSION):
                         self.update = rel
                 except Exception:
-                    pass              # offline, rate-limited, GitHub down: try tomorrow
-            time.sleep(24 * 3600)
+                    pass              # offline, rate-limited, GitHub down: try later
+            time.sleep(6 * 3600)              # a PC that stays on for days must still see a release that day
 
     def toggle_updates(self):
         self.cfg["check_updates"] = not self.cfg.get("check_updates", True)
