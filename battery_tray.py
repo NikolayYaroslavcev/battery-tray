@@ -35,7 +35,7 @@ POLL_ON_BATTERY, POLL_CHARGING, POLL_OFFLINE, HOVER_REFRESH = 20 * 60, 5 * 60, 6
 SLEEP_GAP = 2 * POLL_ON_BATTERY + 60     # longer silence than this means the PC slept, not that we waited
 LOW_LEVELS = (20, 10)
 APP = "BatteryTray"
-VERSION = "2.1.1"
+VERSION = "2.1.2"
 REPO = "NikolayYaroslavcev/battery-tray"
 # Up to 1.5 the program was Razer Battery Tray: an installed copy of that moves itself over (install)
 OLD_APP, OLD_TITLE, OLD_REPO = "RazerBatteryIndicator", "Razer Battery Tray", "NikolayYaroslavcev/razer-battery-tray"
