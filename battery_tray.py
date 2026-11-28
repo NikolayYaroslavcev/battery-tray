@@ -324,13 +324,13 @@ def read_bluetooth():
 # Logitech Unifying / Lightspeed / Bolt receivers, HID++ 2.0 (as documented by Solaar). Written from the
 # protocol notes without the hardware, like the non-Barracuda Razer support.
 LOGI_VID = 0x046D
-LOGI_RECEIVERS = {0xC52B, 0xC532, 0xC534, 0xC539, 0xC53A, 0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547, 0xC548}
+LOGI_RECEIVERS = {0xC52B, 0xC532, 0xC534, 0xC539, 0xC53A, 0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547, 0xC548, 0xC54D}
 LOGI_KINDS = {0: "keyboard", 3: "mouse", 4: "mouse", 5: "mouse", 8: "headset"}
 
 def _hidpp(h, idx, feature, fn, *args):
     """One long HID++ request to device slot idx, reply payload or None (no device, off, unsupported)."""
     code = (fn << 4) | 0x0A                                   # 0x0A: our software id
-    while h.read(20, 0):                                      # a late reply must not answer this request
+    while h.read(20, 5):              # a late reply must not answer this request; 0 would block forever
         pass
     h.write([0x11, idx, feature, code, *args] + [0] * (16 - len(args)))
     end = time.time() + 0.3
