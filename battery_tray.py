@@ -1156,7 +1156,7 @@ class App:
         self.autostart = autostart_enabled()
         # (icon, label, action, checked); None is a separator
         self.base_menu = [
-            ("\ue72c", L("Обновить", "Refresh"), self.wake.set, None),
+            ("\ue72c", L("Обновить", "Refresh"), self.refresh, None),
             None,
             (None, L("На панели задач", "On the taskbar"), lambda: self.set_mode("taskbar"),
              lambda: self.mode.get() == "taskbar"),
@@ -1173,9 +1173,9 @@ class App:
         self.quit_ev, self.show_ev, self.quitting = named_event("quit"), named_event("show"), False
         self.interval, self.polled_at, self.ticked_at = POLL_OFFLINE, 0.0, time.time()
         self.menu_rows, self.menu_hover, self.menu_geom, self.card_geom, self.menu_now = [], -1, None, None, []
-        self.hit.bind("<Button-1>", lambda e: self.wake.set())
+        self.hit.bind("<Button-1>", lambda e: self.refresh())
         self.hit.bind("<Button-3>", self.open_menu)
-        self.cc.bind("<Button-1>", lambda e: self.wake.set())
+        self.cc.bind("<Button-1>", lambda e: self.refresh())
         self.cc.bind("<Button-3>", self.open_menu)
         self.pc.bind("<Motion>", lambda e: self.menu_hover_at(e.y))
         self.pc.bind("<Leave>", lambda e: self.menu_hover_at(-1))
@@ -1273,14 +1273,20 @@ class App:
             woken = self.wake.wait(min(self.interval, POLL_OFFLINE))
             self.wake.clear()
 
+    def refresh(self):
+        """Asked for by the user or a plugged cable: Logitech and HeadsetControl too, not only Razer."""
+        _slow[0] = 0.0
+        self.wake.set()
+
     def pad_watch(self):
-        """A pad connected, removed or swapped: read now, not at the next 20-minute poll."""
+        """A pad or a Logitech cable or receiver connected, removed or swapped: read now, not at the next
+        20-minute poll. A Logitech mouse plugged in to charge shows up as a USB device of its own."""
         last = None
         while True:
             try:
-                pads = set(ds4_pads())
+                pads = set(ds4_pads()) | {d["path"] for d in hid.enumerate(LOGI_VID)}
                 if last is not None and pads != last:
-                    self.wake.set()
+                    self.refresh()
                 last = pads
             except Exception:
                 pass
@@ -1453,7 +1459,7 @@ class App:
             self.tray_pinned = self.tray_hover = False
         else:                                 # a click keeps the card open and gets fresh numbers
             self.tray_pinned = True
-            self.wake.set()
+            self.refresh()
             self.card_token += 1
             self.root.after(150, self.card_watch, self.card_token)
         self.tick(again=False)                # now, not at the next tick
