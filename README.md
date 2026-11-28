@@ -60,7 +60,7 @@ Left click refreshes. Right click opens the menu: refresh, a check mark per devi
 
 In tray icon mode the level is an ordinary icon in the notification area instead: it shows the device that needs charging first, in the same colours. Hovering over it opens the card, a click keeps the card open, right click opens the menu, and the warnings arrive as Windows notifications. Windows 11 puts new icons under the ^ arrow next to the clock at first; drag it onto the taskbar to keep it in sight.
 
-It uses about 20 MB of RAM and close to zero CPU. Every battery query wakes the headset's radio, so while a device runs on battery it is asked only every 20 minutes, which leaves the headset free to switch itself off when idle. Hovering over the widget fetches fresh numbers right away, and so does waking the PC from sleep. While charging it checks every 5 minutes, and a device that's off is looked for once a minute (that only talks to the dongle). Bluetooth devices and DualShock 4 controllers are read every minute, since their level is already there and reading it sends nothing to them.
+It uses about 20 MB of RAM and close to zero CPU. Every battery query wakes the headset's radio, so while a device runs on battery it is asked only every 20 minutes, which leaves the headset free to switch itself off when idle. Changes still show at once: the Barracuda X dongle announces by itself when the headset is turned on or off and when charging starts or stops, and the program only listens to that. Plugging a charging cable into a Logitech mouse, or a dongle or controller into the PC, is picked up the moment Windows sees the device. Hovering over the widget fetches fresh numbers right away, and so does waking the PC from sleep. While charging it checks every 5 minutes, and a device that's off is looked for once a minute (that only talks to the dongle). Bluetooth devices and DualShock 4 controllers are read every minute, since their level is already there and reading it sends nothing to them.
 
 ## Install
 
@@ -85,14 +85,14 @@ The program reads each dongle's HID report descriptor and picks the protocol fro
 
 I only own the Barracuda X 2.4, so everything else is written from protocol notes by other people and may need fixes. Wired mice and keyboards are skipped on purpose, because they answer the battery request with garbage.
 
-If your device doesn't show up or shows nonsense, run `BatteryTray.exe --once`. It saves to `%APPDATA%\BatteryTray\diagnostics.txt` the program version, the Windows build and every Razer HID interface it sees, with its `VID:PID`, including the ones it skipped. Then [report the device](../../issues/new?template=device.yml) with that file.
+If your device doesn't show up or shows nonsense, run `BatteryTray.exe --once`. It saves to `%APPDATA%\BatteryTray\diagnostics.txt` the program version, the Windows build and every Razer, Logitech and Sony HID interface it sees, with its `VID:PID`, including the ones it skipped. Then [report the device](../../issues/new?template=device.yml) with that file.
 
 ### Other brands
 
 The widget also shows devices from other makers, next to the Razer ones:
 
 - **Bluetooth devices of any brand** (headphones, mice, keyboards) whose level Windows already knows, the same number Settings > Bluetooth & devices shows. Nothing is sent to the device.
-- **Logitech mice, keyboards and headsets on a Unifying, Lightspeed or Bolt receiver**, read over HID++ 2.0 as described by [Solaar](https://github.com/pwr-Solaar/Solaar). I have no Logitech device, so this was tested against a simulated receiver only.
+- **Logitech mice, keyboards and headsets on a Unifying, Lightspeed or Bolt receiver, or on their own charging cable**, read over HID++ 2.0 as described by [Solaar](https://github.com/pwr-Solaar/Solaar). Tested with a PRO X 2 (Superlight 2) on its Lightspeed receiver and on the cable; older mice that only report a voltage (G305, G703, G903, G Pro Wireless) get a level estimated from it, untested.
 - **PlayStation 4 DualShock 4 controllers** over Bluetooth or USB, from the status the controller already streams; each gets the end of its Bluetooth address in the name. Over Bluetooth the level is only there once something (Steam, a game, Windows) has switched the controller to its full reports; until then it is not shown.
 - **SteelSeries, Corsair, HyperX, Logitech and other headsets supported by [HeadsetControl](https://github.com/Sapd/HeadsetControl)**, if you install HeadsetControl yourself so that `headsetcontrol` runs from the command line. The program only calls it and does not ship it.
 
@@ -102,7 +102,7 @@ The widget also shows devices from other makers, next to the Razer ones:
 
 **Does it keep my headset from turning off?** Talking to the headset seems to count as activity: queried once a minute, my Barracuda X stayed on for over 20 minutes without sound, although its auto-off timer is set to 15. That's why the program asks only every 20 minutes while a device runs on battery. The headset can switch itself off between two queries, and the program then shows it as off.
 
-**Does it update itself?** Once a day it asks GitHub whether a newer release exists. If one does, the card says so and the right-click menu gets an "Update to …" item. Clicking it downloads the new exe, checks it against the SHA-256 in the release notes and replaces the old file in place, so autostart keeps working. Nothing is installed without that click. The request goes to `api.github.com` and carries no information about you or your devices. You can turn it off with "Check for updates" in the menu. Version 1.0.0 has no updater, so from 1.0.0 you need to download the new version by hand once.
+**Does it update itself?** Every 6 hours it asks GitHub whether a newer release exists. If one does, the card says so and the right-click menu gets an "Update to …" item. Clicking it downloads the new exe, checks it against the SHA-256 in the release notes and replaces the old file in place, so autostart keeps working. Nothing is installed without that click. The request goes to `api.github.com` and carries no information about you or your devices. You can turn it off with "Check for updates" in the menu. Version 1.0.0 has no updater, so from 1.0.0 you need to download the new version by hand once.
 
 **Can a script or Rainmeter read the level?** `BatteryTray.exe --once --json` writes the levels to `%APPDATA%\BatteryTray\diagnostics.json`, for example `{"version": "1.3.0", "devices": [{"name": "Razer Barracuda X", "kind": "headset", "pid": "0550", "online": true, "level": 87, "charging": false}]}`. The widget's window title also holds the level, so screen readers and UI Automation tools can read it.
 
@@ -120,7 +120,7 @@ python -m venv .venv
 
 `python battery_tray.py --once` prints what it finds and exits, add `--json` for JSON. `--quit` closes a running copy, `--portable` runs the exe without installing it.
 
-To build the exe: `pip install -r requirements-build.txt`, then `pyinstaller --onefile --noconsole --icon icon.ico --name BatteryTray battery_tray.py`.
+To build the exe: `pip install -r requirements-build.txt`, then `pyinstaller --onefile --noconsole --icon icon.ico --name BatteryTray battery_tray.py`. Tests: `python -m unittest discover -s tests` (parsers, checked against bytes recorded from real devices).
 
 Releases are built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit, and each one links to its build log, so you can see the exe came from this source. Each release lists the SHA-256 of the exe. To check your download: `certutil -hashfile BatteryTray.exe SHA256`.
 

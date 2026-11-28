@@ -9,7 +9,7 @@ Protocol by what the HID report descriptor offers:
   feature report FF  state blob (Barracuda X 0536, Nari)
   feature, no id     classic 90-byte report, class 07 (mice, keyboards, BlackShark V2 Pro 2020)
 """
-import ctypes, ctypes.wintypes as wt, datetime, hashlib, json, os, re, shutil, subprocess, sys, threading, time, winreg
+import ctypes, ctypes.wintypes as wt, datetime, hashlib, json, os, re, shutil, subprocess, sys, threading, time, uuid, winreg
 import tkinter as tk, tkinter.font as tkfont, urllib.error, urllib.request
 from pathlib import Path
 
@@ -215,7 +215,8 @@ def read_all(radio=True):
     if radio:
         _radio[:] = read_razer()
         if time.time() - _slow[0] > SLOW_EVERY:   # these talk to devices, so not on every hover or offline poll
-            _slow[:] = [time.time(), _optional(read_logitech) + _optional(read_headsetcontrol)]
+            _slow[0] = time.time()                # before the read, so a refresh() during it isn't lost
+            _slow[1] = _optional(read_logitech) + _optional(read_headsetcontrol)
     razer = [r for _, _, n, _ in _radio if (r := n.lower().removeprefix("razer ")) not in ("", "device")]
     bt = [e for e in _optional(read_bluetooth) if not any(r in e[2].lower() for r in razer)]  # same headset via BT
     return _radio + bt + _optional(read_dualshock) + _slow[1]
@@ -249,6 +250,34 @@ def read_razer():
     return out
 
 
+def razer_note(pid, r):
+    """A dongle of the PA family tells by itself when the headset turns on or off (0x20) or its level (0x21)
+    or charging (0x2A) changes: records laid out like a reply's but with 02 where a reply has 01, as many
+    bytes as byte 1 says; what follows is left over from older notes. Applies them to the last reading.
+    True: applied; False: ask the headset (it just came on, or there's no reading yet); None: r holds no
+    such note (a reply to our own question, say)."""
+    if len(r) < 2 or r[0] != 2:
+        return None
+    data, notes, i = bytes(r[2:2 + r[1]]), [], 0
+    while (i := data.find(b"PI", i)) >= 0:
+        if len(data) > i + 13 and data[i + 11] == 2 and data[i + 10] in (0x20, 0x21, 0x2A):
+            notes.append((data[i + 10], data[i + 13]))
+        i += 2
+    if not notes:
+        return None
+    for k, (p, kind, name, st) in enumerate(list(_radio)):
+        if p != pid:
+            continue
+        for param, v in notes:
+            if param == 0x20 and v or param != 0x20 and not isinstance(st, tuple):
+                return False
+            st = "offline" if param == 0x20 else (min(v, 100), st[1]) if param == 0x21 else (st[0], bool(v))
+        if k < len(_radio) and _radio[k][0] == pid:   # the poll thread may have replaced the list meanwhile
+            _radio[k] = (p, kind, name, st)
+        return True
+    return False
+
+
 # --- other brands; their pids are strings so they never mix with Razer product ids ---
 
 def _guess_kind(name):
@@ -265,7 +294,6 @@ class _DevInfo(ctypes.Structure):
     _fields_ = [("cbSize", wt.DWORD), ("ClassGuid", ctypes.c_byte * 16), ("DevInst", wt.DWORD), ("Reserved", ctypes.c_void_p)]
 
 def _prop_key(guid, pid):
-    import uuid
     return _PropKey((ctypes.c_byte * 16).from_buffer_copy(uuid.UUID(guid).bytes_le), pid)
 
 BT_BATTERY = _prop_key("104EA319-6EE2-4701-BD47-8DDBF425BBE5", 2)     # what Settings > Bluetooth shows
@@ -273,6 +301,15 @@ BT_CONNECTED = _prop_key("83DA6326-97A6-4088-9453-A1923F573B29", 15)
 FRIENDLY_NAME = _prop_key("A45C254E-DF1C-4EFD-8020-67D146A850E0", 14)
 BT_CLASS = _prop_key("2BD67D8B-8BEB-48D5-87E0-6CDA3428040A", 10)       # Bluetooth class of device
 
+
+# Windows calls this on its own threads when a HID device appears or goes (CM_Register_Notification)
+class _CmFilter(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("Flags", wt.DWORD), ("FilterType", wt.DWORD), ("Reserved", wt.DWORD),
+                ("ClassGuid", ctypes.c_byte * 16), ("rest", ctypes.c_byte * 384)]   # the union is 200 WCHARs
+CM_CALLBACK = ctypes.WINFUNCTYPE(wt.DWORD, ctypes.c_void_p, ctypes.c_void_p, wt.DWORD, ctypes.c_void_p, wt.DWORD)
+HID_GUID = "4D1E55B2-F16F-11CF-88CB-001111000030"     # GUID_DEVINTERFACE_HID
+# Razer, Logitech, Sony in a device path: HID#VID_046D&PID_C09B..., over Bluetooth ..._VID&0002054c_PID...
+WATCHED_VIDS = re.compile(r"vid[_&]\w*?(1532|046d|054c)", re.I)
 
 def read_bluetooth():
     """Any brand: Windows already keeps the level of connected Bluetooth devices, nothing is woken."""
@@ -327,13 +364,13 @@ LOGI_VID = 0x046D
 LOGI_RECEIVERS = {0xC52B, 0xC532, 0xC534, 0xC539, 0xC53A, 0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547, 0xC548, 0xC54D}
 LOGI_KINDS = {0: "keyboard", 3: "mouse", 4: "mouse", 5: "mouse", 8: "headset"}
 
-def _hidpp(h, idx, feature, fn, *args):
+def _hidpp(h, idx, feature, fn, *args, wait=0.3):
     """One long HID++ request to device slot idx, reply payload or None (no device, off, unsupported)."""
     code = (fn << 4) | 0x0A                                   # 0x0A: our software id
     while h.read(20, 5):              # a late reply must not answer this request; 0 would block forever
         pass
     h.write([0x11, idx, feature, code, *args] + [0] * (16 - len(args)))
-    end = time.time() + 0.3
+    end = time.time() + wait
     while time.time() < end:
         r = h.read(20, 50)
         if r and r[0] == 0x11 and r[1] == idx:
@@ -355,12 +392,12 @@ def _volt_percent(mv):
             return round(p0 + (p1 - p0) * (mv - v0) / (v1 - v0))
     return 0
 
-def _logi_device(h, idx):
-    def feat(code):
-        r = _hidpp(h, idx, 0, 0, code >> 8, code & 0xFF)     # root feature: index of a feature, 0 = none
+def _logi_device(h, idx, probe=0.3):
+    def feat(code, wait=0.3):
+        r = _hidpp(h, idx, 0, 0, code >> 8, code & 0xFF, wait=wait)   # root feature: its index, 0 = none
         return r[0] if r else None
     level = None
-    fi = feat(0x1004)                                         # unified battery
+    fi = feat(0x1004, probe)                                  # unified battery
     if fi is None:
         return None                                           # empty slot or device asleep
     if fi and (r := _hidpp(h, idx, fi, 1)):
@@ -407,7 +444,8 @@ def read_logitech():
         try:
             for idx in range(1, 7) if receiver else (0xFF,):
                 slot = (d["path"], idx)
-                if res := _logi_device(h, idx):
+                # an empty slot never answers, so it gets a short wait; a known device may be slow to wake
+                if res := _logi_device(h, idx, 0.3 if slot in _logi_seen else 0.1):
                     _logi_seen[slot] = res[:2]
                     key = f"lg:{res[1]}"
                     if not isinstance(out.get(key, ("", "", "", "offline"))[3], tuple) or res[2][1]:
@@ -1198,7 +1236,8 @@ class App:
             self.show_alert(None, L(f"{OLD_TITLE} теперь называется {TITLE}", f"{OLD_TITLE} is now {TITLE}"), GREEN, 12)
 
         threading.Thread(target=self.poll_loop, daemon=True).start()
-        threading.Thread(target=self.pad_watch, daemon=True).start()
+        self.device_watch()
+        threading.Thread(target=self.razer_listen, daemon=True).start()
         threading.Thread(target=self.update_loop, daemon=True).start()
         self.tick()
 
@@ -1278,19 +1317,57 @@ class App:
         _slow[0] = 0.0
         self.wake.set()
 
-    def pad_watch(self):
-        """A pad or a Logitech cable or receiver connected, removed or swapped: read now, not at the next
-        20-minute poll. A Logitech mouse plugged in to charge shows up as a USB device of its own."""
-        last = None
+    def razer_listen(self):
+        """Keep the dongles that announce changes open and show what they say at once. Listening costs the
+        headset nothing; asking every few seconds would wake its radio and keep it from switching off."""
+        listening = set()
         while True:
-            try:
-                pads = set(ds4_pads()) | {d["path"] for d in hid.enumerate(LOGI_VID)}
-                if last is not None and pads != last:
-                    self.refresh()
-                last = pads
-            except Exception:
-                pass
-            time.sleep(3)
+            for pid, (path, proto) in list(_working.items()):
+                if proto in (proto_pa1, proto_pa2) and path not in listening:
+                    listening.add(path)
+                    threading.Thread(target=self.razer_notes, args=(pid, path, listening), daemon=True).start()
+            time.sleep(5)
+
+    def razer_notes(self, pid, path, listening):
+        h = hid.device()
+        try:
+            h.open_path(path)
+            while _working.get(pid, (None,))[0] == path:
+                note = razer_note(pid, h.read(64, 1000))
+                if note is None:
+                    continue
+                if note:
+                    self.result = read_all(radio=False), True     # a real new reading, no radio involved
+                else:                 # it was off: now that it talks, one question costs nothing
+                    self.wake.set()
+        except (OSError, ValueError):     # dongle pulled out: forget the path, read_razer finds it again
+            if _working.get(pid, (None,))[0] == path:
+                _working.pop(pid, None)
+        finally:
+            h.close()
+            listening.discard(path)
+
+    def device_watch(self):
+        """Windows says when a HID device of ours comes or goes: a cable plugged in to charge (the device
+        shows up on USB by itself), a dongle, a pad. Read at once, and again a moment later, when a mouse whose
+        cable was pulled is back on its receiver. Other brands' devices are ignored: each read wakes the
+        Razer headset's radio."""
+        def changed(notify, context, action, data, size):
+            if not data or not WATCHED_VIDS.search(ctypes.wstring_at(data + 24)):   # SymbolicLink
+                return 0
+            self.refresh()
+            with self.later_lock:     # Windows may call this on several threads at once
+                if self.later:
+                    self.later.cancel()
+                self.later = threading.Timer(2, self.refresh)
+                self.later.start()
+            return 0
+        self.later, self.later_lock = None, threading.Lock()
+        self.on_change, self.notify = CM_CALLBACK(changed), ctypes.c_void_p()     # kept alive
+        flt = _CmFilter(cbSize=ctypes.sizeof(_CmFilter),
+                        ClassGuid=(ctypes.c_byte * 16).from_buffer_copy(uuid.UUID(HID_GUID).bytes_le))
+        ctypes.windll.cfgmgr32.CM_Register_Notification(ctypes.byref(flt), None, self.on_change,
+                                                       ctypes.byref(self.notify))
 
     def poll_interval(self):
         """Shortest interval any device needs (runs on the UI thread, read by the poll thread)."""
@@ -1942,12 +2019,13 @@ def main():
                 ensure_ascii=False), "diagnostics.json"
         else:                         # for bug reports: also the interfaces we didn't recognise
             w = sys.getwindowsversion()
-            ifaces = [f"{VID:04X}:{d['product_id']:04X} if{d['interface_number']} usage {d['usage_page']:04X}:"
-                      f"{d['usage']:04X} {d.get('product_string')!r} -> {classify(d) or 'skipped'}"
-                      for d in hid.enumerate(VID)]
+            ifaces = [f"{d['vendor_id']:04X}:{d['product_id']:04X} if{d['interface_number']} usage "
+                      f"{d['usage_page']:04X}:{d['usage']:04X} {d.get('product_string')!r}"
+                      + (f" -> {classify(d) or 'skipped'}" if d["vendor_id"] == VID else "")
+                      for vid in (VID, LOGI_VID, 0x054C) for d in hid.enumerate(vid)]
             report = "\n".join([f"{APP} {VERSION}, Windows {w.major}.{w.minor}.{w.build}", "", "Found:"]
-                               + (list(map(str, found)) or ["no wireless Razer devices found"])
-                               + ["", "Razer HID interfaces:"] + (ifaces or ["none"]))
+                               + (list(map(str, found)) or ["no devices found"])
+                               + ["", "Razer, Logitech and Sony HID interfaces:"] + (ifaces or ["none"]))
             name = "diagnostics.txt"
         print(report)
         CFG.parent.mkdir(parents=True, exist_ok=True)
