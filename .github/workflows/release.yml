@@ -25,6 +25,7 @@ jobs:
           if ("v$v" -ne "${{ github.ref_name }}") { throw "VERSION $v in battery_tray.py does not match tag ${{ github.ref_name }}" }
 
       - run: pip install -r requirements-build.txt
+      - run: python -m unittest discover -s tests
       - run: pyinstaller --onefile --noconsole --icon icon.ico --name BatteryTray battery_tray.py
 
       - name: Zip, hash, write release notes
