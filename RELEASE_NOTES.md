@@ -4,10 +4,10 @@ Download `BatteryTray.exe` and double-click it. It installs itself: shortcuts on
 
 Windows SmartScreen will warn because the file isn't signed with a paid certificate: "More info", then "Run anyway". / SmartScreen предупредит, что файл без платной подписи: «Подробнее», затем «Выполнить в любом случае».
 
-What's new in 2.1.2:
-- Logitech mice show their battery and charging while plugged in by cable, as one device with the same chart. / Мыши Logitech показывают заряд и зарядку и при подключении кабелем, это то же устройство с тем же графиком.
-- Any Logitech USB receiver is recognised, not only a fixed list. / Распознаётся любой USB-ресивер Logitech, а не только из списка.
-- Older Lightspeed mice that report only battery voltage (G305, G703, G903, G Pro Wireless) now show a level. / Старые мыши Lightspeed (G305, G703, G903, G Pro Wireless) теперь тоже показывают заряд.
+What's new in 2.1.3:
+- New versions are looked for every 6 hours instead of once a day, so a PC that stays on sees a release the same day. / Обновления проверяются каждые 6 часов, а не раз в сутки.
+
+2.1.2 showed Logitech mice on their charging cable, recognised any Logitech receiver and read the voltage-only G305, G703, G903 and G Pro Wireless.
 
 2.1.1 added the Logitech PRO X 2 receiver and fixed a Logitech read that could stop all updates.
 
