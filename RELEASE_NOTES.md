@@ -4,8 +4,10 @@ Download `BatteryTray.exe` and double-click it. It installs itself: shortcuts on
 
 Windows SmartScreen will warn because the file isn't signed with a paid certificate: "More info", then "Run anyway". / SmartScreen предупредит, что файл без платной подписи: «Подробнее», затем «Выполнить в любом случае».
 
-What's new in 2.1.3:
-- New versions are looked for every 6 hours instead of once a day, so a PC that stays on sees a release the same day. / Обновления проверяются каждые 6 часов, а не раз в сутки.
+What's new in 2.1.4:
+- Plugging a Logitech mouse in to charge, or pulling the cable, shows within seconds; before, it could take five minutes. A click on the widget or "Refresh" also re-reads Logitech devices now. / Зарядка мыши Logitech по кабелю видна через несколько секунд, а не через 5 минут; щелчок по виджету и «Обновить» тоже перечитывают Logitech.
+
+2.1.3 looks for new versions every 6 hours instead of once a day.
 
 2.1.2 showed Logitech mice on their charging cable, recognised any Logitech receiver and read the voltage-only G305, G703, G903 and G Pro Wireless.
 
