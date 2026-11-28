@@ -343,6 +343,18 @@ def _hidpp(h, idx, feature, fn, *args):
                 return None
     return None
 
+# one Li-ion cell under load, mV -> percent (Solaar's table)
+LOGI_VOLTS = ((4186, 100), (4067, 90), (3989, 80), (3922, 70), (3859, 60), (3811, 50), (3778, 40),
+              (3751, 30), (3717, 20), (3671, 10), (3646, 5), (3579, 2), (3500, 0))
+
+def _volt_percent(mv):
+    if mv >= LOGI_VOLTS[0][0]:
+        return 100
+    for (v1, p1), (v0, p0) in zip(LOGI_VOLTS, LOGI_VOLTS[1:]):
+        if mv >= v0:
+            return round(p0 + (p1 - p0) * (mv - v0) / (v1 - v0))
+    return 0
+
 def _logi_device(h, idx):
     def feat(code):
         r = _hidpp(h, idx, 0, 0, code >> 8, code & 0xFF)     # root feature: index of a feature, 0 = none
@@ -360,6 +372,8 @@ def _logi_device(h, idx):
         charging = r[2] in (1, 2, 3)
     elif (fi := feat(0x1000)) and (r := _hidpp(h, idx, fi, 0)):  # battery level status
         level, charging = r[0], r[2] in (1, 2, 3, 4)
+    elif (fi := feat(0x1001)) and (r := _hidpp(h, idx, fi, 0)):  # battery voltage: G305, G703, G903, G Pro
+        level, charging = _volt_percent(r[0] << 8 | r[1]), bool(r[2] & 0x80)
     if level is None:
         return None
     name, kind = "Logitech", "mouse"
@@ -378,30 +392,36 @@ def _logi_device(h, idx):
     return kind, name, (min(level, 100), charging)
 
 def read_logitech():
-    out = []
+    """Receivers (slots 1-6) and devices on their own USB cable (slot 0xFF): a wireless mouse plugged in
+    to charge shows up as itself. Keyed by name, so its readings and chart carry over between the two."""
+    out = {}
     for d in hid.enumerate(LOGI_VID):
-        if d["product_id"] not in LOGI_RECEIVERS or (d["usage_page"], d["usage"]) != (0xFF00, 0x0002):
+        if (d["usage_page"], d["usage"]) != (0xFF00, 0x0002):
             continue                                          # only the long-report HID++ collection
+        receiver = d["product_id"] in LOGI_RECEIVERS or "receiver" in (d.get("product_string") or "").lower()
         h = hid.device()
         try:
             h.open_path(d["path"])
         except (OSError, ValueError):
             continue
         try:
-            for idx in range(1, 7):
-                key = f"lg:{d['product_id']:04X}:{idx}"
+            for idx in range(1, 7) if receiver else (0xFF,):
+                slot = (d["path"], idx)
                 if res := _logi_device(h, idx):
-                    _logi_seen[key] = res[:2]
-                    out.append((key, *res))
-                elif key in _logi_seen:       # asleep: keep it, or its alerts would repeat on every wake
-                    out.append((key, *_logi_seen[key], "offline"))
-        except OSError:                       # receiver unplugged mid-read: keep what we got
+                    _logi_seen[slot] = res[:2]
+                    key = f"lg:{res[1]}"
+                    if not isinstance(out.get(key, ("", "", "", "offline"))[3], tuple) or res[2][1]:
+                        out[key] = (key, *res)            # online beats asleep, the cable beats the radio
+                elif slot in _logi_seen:      # asleep: keep it, or its alerts would repeat on every wake
+                    kind, name = _logi_seen[slot]
+                    out.setdefault(f"lg:{name}", (f"lg:{name}", kind, name, "offline"))
+        except OSError:                       # unplugged mid-read: keep what we got
             pass
         finally:
             h.close()
-    return out
+    return list(out.values())
 
-_logi_seen = {}                               # slot -> (kind, name) of devices that answered before
+_logi_seen = {}                               # (path, slot) -> (kind, name) of devices that answered before
 
 
 DS4_PIDS = {0x05C4, 0x09CC}                  # DualShock 4 v1, v2
